@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG PYTHON_VERSION=3.11.9
-FROM python:${PYTHON_VERSION}-slim as base
+FROM mirror.gcr.io/python:${PYTHON_VERSION}-slim as base
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -35,6 +35,9 @@ RUN poetry install --no-root
 
 # Copy app source code
 COPY . .
+
+RUN chown -R appuser:appuser /app
+RUN chmod -R u+w /app/migration
 
 USER appuser
 
