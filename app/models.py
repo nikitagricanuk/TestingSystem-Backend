@@ -20,7 +20,6 @@ class SessionStatus(str, Enum):
     CLOSED = "CLOSED"
 
 class TestSession(HashModel):
-    pk: str = Field(..., primary_key=True)
     sid: uuid.UUID = Field(default_factory=uuid.uuid4)
     test_id: uuid.UUID = Field(default_factory=uuid.uuid4)
     user_id: uuid.UUID = Field(default_factory=uuid.uuid4)
@@ -28,8 +27,8 @@ class TestSession(HashModel):
     time_finish: Optional[datetime] = None
     duration: int = 0
     indefinite_questions: bool = False
-    question_ids: List[uuid.UUID] = Field(default_factory=list)
-    answers: Dict[int, str] = Field(default_factory=dict)
+    question_ids: str = Field(..., index=False)
+    answers: str = Field(..., index=False)
     questions_answered: int = 0
     questions_remaining: int
     current_question_index: int = 0
@@ -45,7 +44,7 @@ class QuestionRedis(HashModel):
     index: int
     category: str
     content: str
-    choices: List[str]
+    choices: str = Field(..., index=False)
     correct_answer: str
 
     class Meta:
