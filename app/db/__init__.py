@@ -26,14 +26,15 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 def connection(method):
     async def wrapper(*args, **kwargs):
+        if "session" in kwargs and kwargs["session"] is not None:
+            # Use the provided session (e\.g\. from test)
+            return await method(*args, **kwargs)
         async with async_session_maker() as session:
             try:
-                # Явно не открываем транзакции, так как они уже есть в контексте
                 return await method(*args, session=session, **kwargs)
             except Exception as e:
-                await session.rollback()  # Откатываем сессию при ошибке
-                raise e  # Поднимаем исключение дальше
+                await session.rollback()
+                raise e
             finally:
-                await session.close()  # Закрываем сессию
-
+                await session.close()
     return wrapper
