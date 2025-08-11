@@ -1,3 +1,5 @@
 redis-om
+redis
+fakeredis
 pydantic
-fastapi
+pytest

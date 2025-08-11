@@ -55,14 +55,23 @@ def load_questions_from_json(file_path: str):
         q_data['choices'] = json.dumps(q_data.get('choices', []))
         question_obj = QuestionRedis(**q_data)
 
-        document = question_obj.dict()
+        document = question_obj.model_dump()
 
         for key, value in document.items():
-            if isinstance(value, UUID):
+            if value is None:
+                document[key] = ""
+            elif isinstance(value, (UUID, datetime)):
+                document[key] = str(value)
+            elif isinstance(value, Enum):
+                document[key] = value.value
+            elif isinstance(value, bool):
                 document[key] = str(value)
 
+        #Явное указание ключа
+        key = f"{question_obj.Meta.model_key_prefix}:{question_obj.question_id}"
+
         try:
-            redis_client.hset(question_obj.key(), mapping=document)
+            redis_client.hset(key, mapping=document)
             question_ids.append(question_obj.question_id)
         except ConnectionError as e:
             print(f"Failed to save question: {e}")
@@ -89,10 +98,11 @@ def create_session(user_id: uuid.UUID, test_id: uuid.UUID, question_ids: List[uu
         answers=json.dumps({}),
         questions_answered=0,
         current_question_index=0,
+        status=SessionStatus.ACTIVE.value,
     )
 
     redis_client = init_redis_connection()
-    document = session.dict()
+    document = session.model_dump()
 
     #Преобразуем все неподдерживаемые типы в строки
     for key, value in document.items():
@@ -105,8 +115,11 @@ def create_session(user_id: uuid.UUID, test_id: uuid.UUID, question_ids: List[uu
         elif isinstance(value, bool):
             document[key] = str(value)
 
+    #Явное указание ключа
+    key = f"{session.Meta.model_key_prefix}:{session.sid}"
+
     try:
-        redis_client.hset(session.key(), mapping=document)
+        redis_client.hset(key, mapping=document)
     except ConnectionError as e:
         print(f"Failed to save session: {e}")
         raise
@@ -130,7 +143,7 @@ def get_session(session_id: uuid.UUID) -> Optional[TestSession]:
         session_data['user_id'] = uuid.UUID(session_data['user_id'])
         session_data['status'] = SessionStatus(session_data['status'])
 
-        # Десериализация datetime
+        #Десериализация datetime
         session_data['time_start'] = datetime.fromisoformat(session_data['time_start'])
         if session_data['time_finish']:
             session_data['time_finish'] = datetime.fromisoformat(session_data['time_finish'])
@@ -157,7 +170,7 @@ def update_session_with_answer(session_id: uuid.UUID, question_index: int, answe
     session.questions_answered += 1
     session.questions_remaining -= 1
     session.current_question_index += 1
-    session.last_activity = datetime.utcnow()
+    session.last_activity = datetime.now()
     #Сериализуем словарь ответов обратно в JSON-строку
     session.answers = json.dumps(answers_dict)
 
@@ -172,7 +185,7 @@ def finish_session(session_id: uuid.UUID) -> Optional[TestSession]:
         return None
 
     session.status = SessionStatus.FINISHED
-    session.time_finish = datetime.utcnow()
+    session.time_finish = datetime.now()
     session.duration = int((session.time_finish - session.time_start).total_seconds())
 
     #Десериализуем список question_ids из JSON-строки для получения вопросов
