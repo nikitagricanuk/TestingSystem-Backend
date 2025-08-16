@@ -20,7 +20,7 @@ class SessionStatus(str, Enum):
     CLOSED = "CLOSED"
 
 class TestSession(HashModel):
-    sid: uuid.UUID = Field(default_factory=uuid.uuid4)
+    sid: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     test_id: uuid.UUID = Field(default_factory=uuid.uuid4)
     user_id: uuid.UUID = Field(default_factory=uuid.uuid4)
     time_start: datetime = Field(default_factory=datetime.utcnow)

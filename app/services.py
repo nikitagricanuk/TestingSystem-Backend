@@ -6,7 +6,7 @@ from enum import Enum
 from typing import List, Dict, Optional
 from datetime import datetime
 
-from redis_om import get_redis_connection
+from redis_om import get_redis_connection, NotFoundError
 from redis.exceptions import ConnectionError
 from redis import Redis
 from uuid import UUID
@@ -40,42 +40,19 @@ def init_redis_connection() -> Redis:
 
 
 def load_questions_from_json(file_path: str):
-    #Loads questions from a JSON file and saves them to Redis.
-    redis_client = init_redis_connection()
+    #Загружает вопросы из JSON-файла и сохраняет их в Redis.
     with open(file_path, 'r', encoding='utf-8') as f:
         questions_data = json.load(f)
 
     question_ids = []
-
-    print("Waiting 5 seconds for Redis to fully initialize...")
-    time.sleep(5)
     print("Starting to save questions.")
 
     for q_data in questions_data:
+        #Убедимся, что все необходимые поля присутствуют
         q_data['choices'] = json.dumps(q_data.get('choices', []))
         question_obj = QuestionRedis(**q_data)
-
-        document = question_obj.model_dump()
-
-        for key, value in document.items():
-            if value is None:
-                document[key] = ""
-            elif isinstance(value, (UUID, datetime)):
-                document[key] = str(value)
-            elif isinstance(value, Enum):
-                document[key] = value.value
-            elif isinstance(value, bool):
-                document[key] = str(value)
-
-        #Явное указание ключа
-        key = f"{question_obj.Meta.model_key_prefix}:{question_obj.question_id}"
-
-        try:
-            redis_client.hset(key, mapping=document)
-            question_ids.append(question_obj.question_id)
-        except ConnectionError as e:
-            print(f"Failed to save question: {e}")
-            raise
+        question_obj.save() #ИСПОЛЬЗУЕМ .save()
+        question_ids.append(question_obj.question_id)
 
     print(f"Loaded {len(question_ids)} questions into Redis.")
     return question_ids
@@ -101,57 +78,19 @@ def create_session(user_id: uuid.UUID, test_id: uuid.UUID, question_ids: List[uu
         status=SessionStatus.ACTIVE.value,
     )
 
-    redis_client = init_redis_connection()
-    document = session.model_dump()
-
-    #Преобразуем все неподдерживаемые типы в строки
-    for key, value in document.items():
-        if value is None:
-            document[key] = ""  # Преобразуем None в пустую строку
-        elif isinstance(value, (uuid.UUID, datetime)):
-            document[key] = str(value)
-        elif isinstance(value, Enum):
-            document[key] = value.value
-        elif isinstance(value, bool):
-            document[key] = str(value)
-
-    #Явное указание ключа
-    key = f"{session.Meta.model_key_prefix}:{session.sid}"
-
-    try:
-        redis_client.hset(key, mapping=document)
-    except ConnectionError as e:
-        print(f"Failed to save session: {e}")
-        raise
-
+    #Используем .save() от redis-om, убираем ручной hset
+    session.save()
     return session
 
 
 def get_session(session_id: uuid.UUID) -> Optional[TestSession]:
     #Retrieves a session from Redis by its ID.
     try:
-        redis_client = init_redis_connection()
-        session_key = f"{TestSession.Meta.model_key_prefix}:{session_id}"
-
-        session_data = redis_client.hgetall(session_key)
-
-        if not session_data:
-            return None
-
-        session_data['sid'] = uuid.UUID(session_data['sid'])
-        session_data['test_id'] = uuid.UUID(session_data['test_id'])
-        session_data['user_id'] = uuid.UUID(session_data['user_id'])
-        session_data['status'] = SessionStatus(session_data['status'])
-
-        #Десериализация datetime
-        session_data['time_start'] = datetime.fromisoformat(session_data['time_start'])
-        if session_data['time_finish']:
-            session_data['time_finish'] = datetime.fromisoformat(session_data['time_finish'])
-        if session_data['last_activity']:
-            session_data['last_activity'] = datetime.fromisoformat(session_data['last_activity'])
-
-        return TestSession(**session_data)
-
+        #Используем .get() от redis-om, убираем ручной hgetall
+        return TestSession.get(session_id)
+    except NotFoundError:
+        print(f"Session with sid {session_id} not found.")
+        return None
     except Exception as e:
         print(f"Error getting session: {e}")
         return None
@@ -179,7 +118,7 @@ def update_session_with_answer(session_id: uuid.UUID, question_index: int, answe
 
 
 def finish_session(session_id: uuid.UUID) -> Optional[TestSession]:
-    #Finishes a session, calculates duration, and scores the session.
+    # Завершает сессию, вычисляет длительность и оценивает ее.
     session = get_session(session_id)
     if not session or session.status == SessionStatus.FINISHED:
         return None
@@ -188,27 +127,20 @@ def finish_session(session_id: uuid.UUID) -> Optional[TestSession]:
     session.time_finish = datetime.now()
     session.duration = int((session.time_finish - session.time_start).total_seconds())
 
-    #Десериализуем список question_ids из JSON-строки для получения вопросов
     question_ids = json.loads(session.question_ids)
     questions = [QuestionRedis.get(qid) for qid in question_ids]
 
     score = score_session(session, questions)
-    #You might want to save the score in the session or a separate model
     session.save()
     print(f"Session {session.sid} finished. Score: {score}")
     return session
 
 
 def score_session(session: TestSession, questions: List[QuestionRedis]) -> float:
-    #Calculates the score for a finished session.
+    #Вычисляет оценку для завершенной сессии.
     correct_answers = 0
-
-    #Десериализуем ответы из JSON-строки
     session_answers = json.loads(session.answers)
-
-    question_map = {}
-    for q in questions:
-        question_map[q.index] = q.correct_answer
+    question_map = {q.index: q.correct_answer for q in questions}
 
     for question_index, answer in session_answers.items():
         if question_map.get(int(question_index)) == answer:
@@ -219,16 +151,12 @@ def score_session(session: TestSession, questions: List[QuestionRedis]) -> float
 
 
 def get_current_question(session: TestSession) -> Optional[QuestionRedis]:
-    #Gets the current question for the session.
-    #Десериализуем список question_ids из JSON-строки
-    question_ids = json.loads(session.question_ids)
-    if session.current_question_index >= len(question_ids):
+    # Получает текущий вопрос для сессии.
+    if session.current_question_index >= len(session.question_ids):
         return None
 
-    current_qid = question_ids[session.current_question_index]
-    question_obj = QuestionRedis.get(current_qid)
-
-    #Десериализуем список choices из JSON-строки для возвращаемого объекта
+    current_qid = session.question_ids[session.current_question_index]
+    question_obj = QuestionRedis.get(str(current_qid))  #ОБРАТИТЕ ВНИМАНИЕ НА str(current_qid)
     question_obj.choices = json.loads(question_obj.choices)
 
     return question_obj
