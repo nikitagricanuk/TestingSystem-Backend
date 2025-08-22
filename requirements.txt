@@ -1,5 +1,4 @@
 redis-om
 redis
-fakeredis
 pydantic
 pytest
