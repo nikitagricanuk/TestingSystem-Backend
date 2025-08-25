@@ -23,7 +23,7 @@ from redis_om import get_redis_connection, NotFoundError
 def redis_client():
     conn = get_redis_connection(url=os.getenv("REDIS_URL", "redis://redis:6379/13"))
 
-    # Explicitly drop all indexes before and after each test
+    # Явное удаление всех индексов до и после каждого теста
     QuestionRedis.Meta.database = conn
     TestSession.Meta.database = conn
 
@@ -31,7 +31,7 @@ def redis_client():
         QuestionRedis.drop_indexes()
         TestSession.drop_indexes()
     except:
-        pass # Ignore errors if indexes don't exist yet
+        pass # Игнорирование ошибки, если индексы еще не существуют
 
     conn.flushall()
 
@@ -55,20 +55,20 @@ def test_load_questions_from_json_success(redis_client):
 
 
 def test_create_session_success(redis_client):
-    q1 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q1?", choices=json.dumps(["a"]),
+    q1 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q1?", choices=json.dumps(["a"]),
                        correct_answer="a", question_type="single_choice", index=0, category="Test", content="Easy")
-    q2 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q2?", choices=json.dumps(["b"]),
+    q2 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q2?", choices=json.dumps(["b"]),
                        correct_answer="b", question_type="single_choice", index=1, category="Test", content="Easy")
     q1.save()
     q2.save()
-    question_ids = [q1.question_id, q2.question_id]
+    question_ids = [q1.pk, q2.pk]
 
-    user_id = str(uuid.uuid4())
-    test_id = str(uuid.uuid4())
+    user_id = uuid.uuid4()
+    test_id = uuid.uuid4()
     session = create_session(user_id, test_id, question_ids, False, "127.0.0.1", redis_client)
 
     assert session is not None
-    assert isinstance(session.sid, str)
+    assert isinstance(session.sid, uuid.UUID)
     assert session.user_id == user_id
     assert session.status == SessionStatus.ACTIVE.value
 
@@ -78,27 +78,27 @@ def test_create_session_success(redis_client):
 
 
 def test_get_session_success(redis_client):
-    q1 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q1?", choices=json.dumps(["a"]),
+    q1 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q1?", choices=json.dumps(["a"]),
                        correct_answer="a", question_type="single_choice", index=0, category="Test", content="Easy")
     q1.save()
-    question_ids = [q1.question_id]
-    user_id = str(uuid.uuid4())
-    test_id = str(uuid.uuid4())
+    question_ids = [q1.pk]
+    user_id = uuid.uuid4()
+    test_id = uuid.uuid4()
     session = create_session(user_id, test_id, question_ids, False, "127.0.0.1", redis_client)
     retrieved_session = get_session(session.pk, redis_client)
 
     assert retrieved_session is not None
     assert retrieved_session.sid == session.sid
-    assert retrieved_session.user_id == user_id
+    assert str(retrieved_session.user_id) == str(user_id)
 
 
 def test_update_session_with_answer(redis_client):
-    q1 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q1?", choices=json.dumps(["a"]),
+    q1 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q1?", choices=json.dumps(["a"]),
                        correct_answer="a", question_type="single_choice", index=0, category="Test", content="Easy")
     q1.save()
-    question_ids = [q1.question_id]
+    question_ids = [q1.pk]
 
-    session = create_session(str(uuid.uuid4()), str(uuid.uuid4()), question_ids, False, "127.0.0.1", redis_client)
+    session = create_session(uuid.uuid4(), uuid.uuid4(), question_ids, False, "127.0.0.1", redis_client)
     updated_session = update_session_with_answer(session.pk, 0, "a", redis_client)
 
     assert updated_session is not None
@@ -107,23 +107,20 @@ def test_update_session_with_answer(redis_client):
 
 
 def test_finish_session(redis_client):
-    q1 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q1?", choices=json.dumps(["a"]),
+    q1 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q1?", choices=json.dumps(["a"]),
                        correct_answer="a", question_type="single_choice", index=0, category="Test", content="Easy")
-    q2 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q2?", choices=json.dumps(["d"]),
+    q2 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q2?", choices=json.dumps(["d"]),
                        correct_answer="d", question_type="single_choice", index=1, category="Test", content="Hard")
     q1.save()
     q2.save()
 
-    # ДОБАВЬТЕ ЭТОТ КОД
     assert QuestionRedis.get(q1.pk) is not None
     assert QuestionRedis.get(q2.pk) is not None
-    # КОНЕЦ ДОБАВЛЕНИЯ
 
-    # Измените эту строку
     question_ids = [q1.pk, q2.pk]
 
     # Создаем сессию и получаем объект
-    session = create_session(str(uuid.uuid4()), str(uuid.uuid4()), question_ids, False, "127.0.0.1", redis_client)
+    session = create_session(uuid.uuid4(), uuid.uuid4(), question_ids, False, "127.0.0.1", redis_client)
 
     # Обновляем сессию и работаем с возвращаемым объектом
     session = update_session_with_answer(session.pk, 0, "a", redis_client)
@@ -137,17 +134,17 @@ def test_finish_session(redis_client):
 
 
 def test_score_session(redis_client):
-    q1 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q1?", choices=json.dumps(["a"]),
+    q1 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q1?", choices=json.dumps(["a"]),
                        correct_answer="a", question_type="single_choice", index=0, category="Test", content="Easy")
-    q2 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q2?", choices=json.dumps(["d"]),
+    q2 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q2?", choices=json.dumps(["d"]),
                        correct_answer="d", question_type="single_choice", index=1, category="Test", content="Hard")
     q1.save()
     q2.save()
     # Измените эту строку
     question_ids = [q1.pk, q2.pk]
 
-    user_id = str(uuid.uuid4())
-    test_id = str(uuid.uuid4())
+    user_id = uuid.uuid4()
+    test_id = uuid.uuid4()
     session = create_session(user_id, test_id, question_ids, False, "127.0.0.1", redis_client)
 
     session.answers = json.dumps({"0": "a", "1": "d"})
@@ -165,28 +162,28 @@ def test_score_session(redis_client):
 
 
 def test_get_current_question(redis_client):
-    q1 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q1?", choices=json.dumps(["a", "b", "c"]),
+    q1 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q1?", choices=json.dumps(["a", "b", "c"]),
                        correct_answer="a", question_type="single_choice", index=0, category="Test", content="Easy")
-    q2 = QuestionRedis(question_id=str(uuid.uuid4()), question_text="Q2?", choices=json.dumps(["d", "e", "f"]),
+    q2 = QuestionRedis(question_id=uuid.uuid4(), question_text="Q2?", choices=json.dumps(["d", "e", "f"]),
                        correct_answer="d", question_type="single_choice", index=1, category="Test", content="Hard")
     q1.save()
     q2.save()
-    # Измените эту строку
+
     question_ids = [q1.pk, q2.pk]
 
     # Создаем сессию и получаем объект
-    session = create_session(str(uuid.uuid4()), str(uuid.uuid4()), question_ids, False, "127.0.0.1", redis_client)
+    session = create_session(uuid.uuid4(), uuid.uuid4(), question_ids, False, "127.0.0.1", redis_client)
 
     # Передаем объект сессии напрямую в get_current_question
     current_question = get_current_question(session, redis_client)
     assert current_question is not None
-    assert current_question.question_id == question_ids[0]
-    assert json.loads(current_question.choices) == ["a", "b", "c"]
+    assert current_question.pk == question_ids[0]
+    assert current_question.choices == ["a", "b", "c"]
 
     # Обновляем сессию и получаем новый объект
     updated_session = update_session_with_answer(session.pk, 0, "a", redis_client)
     # Передаем обновленный объект
     next_question = get_current_question(updated_session, redis_client)
     assert next_question is not None
-    assert next_question.question_id == question_ids[1]
-    assert json.loads(next_question.choices) == ["d", "e", "f"]
+    assert next_question.pk == question_ids[1]
+    assert next_question.choices == ["d", "e", "f"]

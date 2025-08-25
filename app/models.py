@@ -13,9 +13,9 @@ class SessionStatus(str, Enum):
     CLOSED = "CLOSED"
 
 class TestSession(HashModel):
-    sid: str = Field(primary_key=True)
-    test_id: str = Field(index=True)
-    user_id: str = Field(index=True)
+    sid: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    test_id: uuid.UUID = Field(default_factory=uuid.uuid4, index=True)
+    user_id: uuid.UUID = Field(default_factory=uuid.uuid4, index=True)
     time_start: datetime = Field(default_factory=datetime.utcnow)
     time_finish: Optional[datetime] = None
     duration: int = 0
@@ -31,21 +31,20 @@ class TestSession(HashModel):
 
     @validator('time_start', 'time_finish', pre=True)
     def parse_datetime(cls, v):
-        if v is None or v == "":  # <--- Добавили проверку на пустую строку
+        if v is None or v == "":  # Проверка на пустую строку
             return None
         if isinstance(v, datetime):
             return v
         try:
             return datetime.fromisoformat(v)
         except (ValueError, TypeError):
-            # Попробуйте другие форматы, если fromisoformat не сработал
             return datetime.strptime(v, "%Y-%m-%d %H:%M:%S.%f")
 
     class Meta:
         model_key_prefix = "test_session"
 
 class QuestionRedis(HashModel):
-    question_id: str = Field(index=True, primary_key=True)
+    question_id: uuid = Field(default_factory=uuid.uuid4, index=True, primary_key=True)
     index: int = Field(index=True)
     category: str = Field(index=False)
     content: str = Field(index=False)

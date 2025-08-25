@@ -57,7 +57,7 @@ def load_questions_from_json(file_path: str, redis_client: Redis):
     return question_ids
 
 
-def create_session(user_id: str, test_id: str, question_ids: List[str], indefinite_questions: bool,
+def create_session(user_id: uuid.UUID, test_id: uuid.UUID, question_ids: List[str], indefinite_questions: bool,
                    ip_address: str, redis_client: Redis) -> TestSession:
     # Явно устанавливаем базу данных перед использованием модели
     TestSession.Meta.database = redis_client
@@ -139,7 +139,6 @@ def finish_session(session: TestSession, redis_client: Redis) -> Optional[TestSe
 
 
 def score_session(session: TestSession, questions: List[QuestionRedis], redis_client: Redis) -> float:
-    # Здесь нет вызовов .save() или .get(), поэтому менять ничего не нужно
     correct_answers = 0
     session_answers = json.loads(session.answers)
     question_map = {q.index: q.correct_answer for q in questions}
