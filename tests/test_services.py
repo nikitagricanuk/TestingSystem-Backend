@@ -6,9 +6,7 @@ import time
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
-from app.services import (
-    init_redis_connection,
-    load_questions_from_json,
+from app.services.sessions import (
     create_session,
     get_session,
     update_session_with_answer,
@@ -16,7 +14,9 @@ from app.services import (
     score_session,
     get_current_question,
 )
-from app.models import TestSession, QuestionRedis, SessionStatus
+from app.core.databases import init_redis_connection
+from app.utils.helpers import load_questions_from_json
+from app.models.redis import TestSession, QuestionRedis, SessionStatus
 from redis_om import get_redis_connection, NotFoundError
 
 @pytest.fixture(scope="function", autouse=True)
