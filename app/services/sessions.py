@@ -11,50 +11,7 @@ from redis.exceptions import ConnectionError
 from redis import Redis
 from uuid import UUID
 
-from app.models import TestSession, QuestionRedis, SessionStatus
-
-
-def init_redis_connection() -> Redis:
-    redis_url = os.getenv("REDIS_URL")
-    if not redis_url:
-        raise ValueError("REDIS_URL environment variable is not set.")
-
-    retries = 5
-    delay = 2
-    for i in range(retries):
-        try:
-            conn = get_redis_connection(
-                url=redis_url,
-                decode_responses=True
-            )
-            conn.ping()
-            print("Successfully connected to Redis!")
-            return conn
-        except ConnectionError as e:
-            print(f"Attempt {i + 1} of {retries}: Could not connect to Redis. Retrying in {delay} seconds...")
-            time.sleep(delay)
-            delay *= 2
-
-    raise ConnectionError("Failed to connect to Redis after multiple attempts.")
-
-
-def load_questions_from_json(file_path: str, redis_client: Redis):
-    # Явно устанавливаем базу данных перед использованием модели
-    QuestionRedis.Meta.database = redis_client
-    with open(file_path, 'r', encoding='utf-8') as f:
-        questions_data = json.load(f)
-
-    question_ids = []
-    print("Starting to save questions.")
-    for q_data in questions_data:
-        q_data['choices'] = json.dumps(q_data.get('choices', []))
-        q_data['question_id'] = str(q_data.get('question_id', uuid.uuid4()))
-        question_obj = QuestionRedis(**q_data)
-        question_obj.save()
-        question_ids.append(question_obj.question_id)
-
-    print(f"Loaded {len(question_ids)} questions into Redis.")
-    return question_ids
+from app.models.redis import TestSession, QuestionRedis, SessionStatus
 
 
 def create_session(user_id: uuid.UUID, test_id: uuid.UUID, question_ids: List[str], indefinite_questions: bool,
@@ -81,7 +38,7 @@ def create_session(user_id: uuid.UUID, test_id: uuid.UUID, question_ids: List[st
     return session
 
 
-def get_session(session_id: str, redis_client: Redis) -> Optional[TestSession]:
+def get_session(session_id: UUID, redis_client: Redis) -> Optional[TestSession]:
     # Явно устанавливаем базу данных перед использованием модели
     TestSession.Meta.database = redis_client
     try:
