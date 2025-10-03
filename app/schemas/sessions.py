@@ -20,7 +20,6 @@ class Session(BaseModel):
     current_question_index: Optional[int] = Field(None)
     status: Optional[str] = Field(None)
     ip_address: Optional[str] = Field(None)
-    device_type: Optional[str] = Field(None)
     last_activity_unix: Optional[int] = Field(None)
 
 class SessionDelete(BaseModel):
