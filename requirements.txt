@@ -1,4 +1,0 @@
-redis-om
-redis
-pydantic
-pytest
