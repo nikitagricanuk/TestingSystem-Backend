@@ -14,12 +14,14 @@ from app.services.sessions import create_session, get_session
 
 router = APIRouter()
 
+
 @router.post("/tests/{test-id}/start")
 async def post_tests_test_id_start(test_id: UUID) -> Session:
     """Start new test session"""
     print("Loading questions from JSON...")
+    redis_connection: Redis = init_redis_connection()
     # Убедитесь, что путь к файлу верен
-    question_ids = load_questions_from_json('questions.json')
+    question_ids = load_questions_from_json('questions.json', redis_connection)
 
     print("Creating a new test session...")
     session = create_session(
@@ -27,15 +29,19 @@ async def post_tests_test_id_start(test_id: UUID) -> Session:
         test_id=uuid.uuid4(),
         question_ids=question_ids,
         indefinite_questions=False,
-        ip_address="127.0.0.1"
+        ip_address="127.0.0.1",
+        redis_client=redis_connection
     )
     print(f"Session created with ID: {session.sid}")
     return Session(sid=session.sid, test_id=session.test_id, user_id=session.user_id,
-                   time_start=datetime.now(timezone.utc).isoformat(), time_start_unix=datetime.now(timezone.utc).timestamp(),
+                   time_start=datetime.now(timezone.utc), time_start_unix=int(datetime.now(timezone.utc).timestamp()),
                    time_finish=None, time_finish_unix=None, duration_seconds=None,
-                   indefinite_questions=session.indefinite_questions, ip_address="127.0.0.1",
-                   questions_remaining=session.questions_remaining, current_question_index=session.current_question_index,
-                   status=session.status, device_type=session.device_type, last_activity_unix=datetime.now(timezone.utc).timestamp())
+                   indefinite_questions=bool(session.indefinite_questions), ip_address="127.0.0.1",
+                   questions_remaining=session.questions_remaining,
+                   current_question_index=session.current_question_index,
+                   status=session.status, last_activity_unix=int(datetime.now(timezone.utc).timestamp()),
+                   total_questions=None, questions_answered=session.questions_answered)
+
 
 @router.get("/tests/sessions")
 async def get_tests_sessions():
@@ -77,10 +83,12 @@ async def get_tests_sessions():
         "echo": {}
     }
 
+
 @router.get("/tests/session/{session-id}")
 async def get_tests_session_session_id(session_id: UUID):
     """Get session info"""
     get_session(session_id=session_id);
+
 
 @router.delete("/tests/session/{session-id}")
 async def delete_tests_session_session_id(session_id: UUID):
@@ -91,6 +99,7 @@ async def delete_tests_session_session_id(session_id: UUID):
         "echo": {"session-id": session_id}
     }
 
+
 @router.get("/tests/session/{session-id}/question/list")
 async def get_tests_session_session_id_question_list(session_id: UUID):
     """List all questions"""
@@ -99,6 +108,7 @@ async def get_tests_session_session_id_question_list(session_id: UUID):
         "operationId": "get_tests_session_session_id_question_list",
         "echo": {"session-id": session_id}
     }
+
 
 @router.get("/tests/session/{session-id}/question/{question-id}")
 async def get_tests_session_session_id_question_question_id(session_id: UUID, question_id: UUID):
@@ -109,6 +119,7 @@ async def get_tests_session_session_id_question_question_id(session_id: UUID, qu
         "echo": {"session-id": session_id, "question-id": question_id}
     }
 
+
 @router.get("/tests/session/{session-id}/question/next")
 async def get_tests_session_session_id_question_next(session_id: UUID):
     """Get next question in session"""
@@ -117,6 +128,7 @@ async def get_tests_session_session_id_question_next(session_id: UUID):
         "operationId": "get_tests_session_session_id_question_next",
         "echo": {"session-id": session_id}
     }
+
 
 @router.get("/tests/session/{session-id}/question/prev")
 async def get_tests_session_session_id_question_prev(session_id: UUID):
@@ -127,6 +139,7 @@ async def get_tests_session_session_id_question_prev(session_id: UUID):
         "echo": {"session-id": session_id}
     }
 
+
 @router.post("/tests/session/{session-id}/question/{question-id}/answer")
 async def post_tests_session_session_id_question_question_id_answer(session_id: UUID, question_id: UUID, payload: dict):
     """Submit answer to the question"""
@@ -135,6 +148,7 @@ async def post_tests_session_session_id_question_question_id_answer(session_id: 
         "operationId": "post_tests_session_session_id_question_question_id_answer",
         "echo": {"session-id": session_id, "question-id": question_id, "body": payload}
     }
+
 
 @router.post("/tests/session/{session-id}/submit")
 async def post_tests_session_session_id_submit(session_id: UUID):
