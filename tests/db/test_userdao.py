@@ -1,7 +1,7 @@
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from app.db.models.users import Base, Role, Permission, User
+from app.models.database import Base, Role, Permission, User
 from app.db.dao.userdao import UserDAO, RoleEnum
 import uuid
 

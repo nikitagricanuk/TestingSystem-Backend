@@ -1,9 +1,9 @@
 from app.db import connection
-from app.db.models.users import User
+from app.models.database import User
 from sqlalchemy import select
 
 from enum import Enum
-from app.db.models.users import Role
+from app.models.database import Role
 
 class RoleEnum(Enum):
     ADMIN = "admin"
