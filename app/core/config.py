@@ -23,3 +23,5 @@ class Settings(BaseSettings):
             f"redis://{self.redis_user}:{self.redis_password}"
             f"@{self.redis_host}:{self.redis_port}"
         )
+
+settings = Settings()

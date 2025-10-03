@@ -1,4 +1,4 @@
-from app.db import connection
+from app.core.databases import connection
 from app.models.database import User
 from sqlalchemy import select
 
