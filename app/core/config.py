@@ -24,4 +24,9 @@ class Settings(BaseSettings):
             f"@{self.redis_host}:{self.redis_port}"
         )
 
+    @property
+    def get_postgres_url(self):
+        return (f"postgresql+asyncpg://{self.db_user}:{self.db_password}@"
+                f"{self.db_host}:{self.db_port}/{self.db_name}")
+
 settings = Settings()
