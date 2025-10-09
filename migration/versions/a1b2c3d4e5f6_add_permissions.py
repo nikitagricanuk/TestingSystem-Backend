@@ -4,7 +4,7 @@ from sqlalchemy import table, column, String, Text, UUID
 from alembic import op
 
 revision = 'a1b2c3d4e5f6'
-down_revision = None  # or previous revision ID
+down_revision = '35772328bea3'  # or previous revision ID
 
 permissions_table = table(
     "permissions",
