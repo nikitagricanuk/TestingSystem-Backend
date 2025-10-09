@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.models.database import Base, Role, Permission, User
-from app.db.dao.userdao import UserDAO, RoleEnum
+from app.repositories.dao.userdao import UserDAO, RoleEnum
 import uuid
 
 @pytest.mark.asyncio
@@ -14,9 +14,30 @@ class TestUserDAO:
             await conn.run_sync(Base.metadata.create_all)
         async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
         async with async_session_maker() as session:
+            # --- seed roles ---
             admin_role = Role(id=uuid.uuid4(), role="admin")
             student_role = Role(id=uuid.uuid4(), role="student")
-            session.add_all([admin_role, student_role])
+
+            # --- seed permissions ---
+            perm_read_users = Permission(id=uuid.uuid4(), name="read_users", description="Can read users")
+            perm_write_users = Permission(id=uuid.uuid4(), name="write_users", description="Can create or update users")
+            perm_manage_roles = Permission(id=uuid.uuid4(), name="manage_roles", description="Can assign roles and permissions")
+
+            # --- assign permissions to roles ---
+            # Admin gets broad permissions
+            admin_role.permissions.append(perm_read_users)
+            admin_role.permissions.append(perm_write_users)
+            admin_role.permissions.append(perm_manage_roles)
+            # Student gets no user-management permissions on purpose
+            # (kept empty to satisfy tests that expect lack of permission)
+
+            session.add_all([
+                admin_role,
+                student_role,
+                perm_read_users,
+                perm_write_users,
+                perm_manage_roles,
+            ])
             await session.commit()
             yield session
 
@@ -145,3 +166,96 @@ class TestUserDAO:
         await dao.delete_user_by_email("test@test.com", session=test_session)
         deleted_user = await dao.get_user_by_email("test@test.com", session=test_session)
         assert deleted_user is None
+
+    async def test_check_user_permission_no_permission(self, test_session):
+        dao = UserDAO()
+        user = await dao.create(
+            first_name="Eve",
+            middle_name="G.",
+            second_name="Martinez",
+            age=29,
+            email="email@email.com",
+            phone="5566778899",
+            password="password202",
+            role=RoleEnum.STUDENT,
+            school_id=None,
+            session=test_session
+        )
+        has_permission = await dao.check_permission_by_id(user.id, "read_users", session=test_session)
+        assert has_permission is False
+
+    async def test_check_user_permission_with_permission(self, test_session):
+        dao = UserDAO()
+        user = await dao.create(
+            first_name="Max",
+            middle_name="K.",
+            second_name="Martinez",
+            age=31,
+            email="max@email.com",
+            phone="55646778899",
+            password="password202",
+            role=RoleEnum.ADMIN,
+            school_id=None,
+            session=test_session
+        )
+        has_permission = await dao.check_permission_by_id(user.id, "read_users", session=test_session)
+        assert has_permission is True
+
+    async def test_check_user_permission_by_email_admin_true(self, test_session):
+        dao = UserDAO()
+        # create admin user who should have read_users via role seeding in fixture
+        await dao.create(
+            first_name="Ada",
+            middle_name="M.",
+            second_name="Admin",
+            age=27,
+            email="ada.admin@example.com",
+            phone="100200300",
+            password="s3cret",
+            role=RoleEnum.ADMIN,
+            school_id=None,
+            session=test_session,
+        )
+        has_perm = await dao.check_permission_by_email(
+            "ada.admin@example.com", "read_users", session=test_session
+        )
+        assert has_perm is True
+
+    async def test_check_user_permission_by_email_student_false(self, test_session):
+        dao = UserDAO()
+        await dao.create(
+            first_name="Stu",
+            middle_name="D.",
+            second_name="Dent",
+            age=19,
+            email="stu.dent@example.com",
+            phone="400500600",
+            password="passw0rd",
+            role=RoleEnum.STUDENT,
+            school_id=None,
+            session=test_session,
+        )
+        has_perm = await dao.check_permission_by_email(
+            "stu.dent@example.com", "read_users", session=test_session
+        )
+        assert has_perm is False
+
+    async def test_check_user_permission_unknown_permission(self, test_session):
+        dao = UserDAO()
+        user = await dao.create(
+            first_name="Nora",
+            middle_name="Q.",
+            second_name="Permless",
+            age=23,
+            email="nora@example.com",
+            phone="777777777",
+            password="pw",
+            role=RoleEnum.ADMIN,
+            school_id=None,
+            session=test_session,
+        )
+        # Check a permission that doesn't exist in DB at all
+        has_perm = await dao.check_permission_by_id(
+            user.id, "totally_unknown_permission", session=test_session
+        )
+        assert has_perm is False

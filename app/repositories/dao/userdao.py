@@ -1,9 +1,10 @@
+from uuid import UUID
+
 from app.core.databases import connection
-from app.models.database import User
+from app.models.database import User, Role, Permission, role2permission
 from sqlalchemy import select
 
 from enum import Enum
-from app.models.database import Role
 
 class RoleEnum(Enum):
     ADMIN = "admin"
@@ -97,3 +98,19 @@ class UserDAO:
         await session.delete(user_instance)
         await session.commit()
         return True
+
+    @connection
+    async def check_permission_by_id(self, user_id, permission_name, session=None) -> bool:
+        q = select(1).select_from(User).join(User.role).where(
+            User.id == user_id,
+            Role.permissions.any(Permission.name == permission_name)
+        ).limit(1)
+        return (await session.execute(q)).scalar_one_or_none() is not None
+
+    @connection
+    async def check_permission_by_email(self, email, permission_name, session=None) -> bool:
+        q = select(1).select_from(User).join(User.role).where(
+            User.email == email,
+            Role.permissions.any(Permission.name == permission_name)
+        ).limit(1)
+        return (await session.execute(q)).scalar_one_or_none() is not None
