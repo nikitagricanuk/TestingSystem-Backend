@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import List, Optional
@@ -21,9 +22,11 @@ class TestSession(HashModel):
     time_start: datetime = Field(default_factory=datetime.utcnow)
     time_finish: Optional[datetime] = None
     duration: int = 0
-    indefinite_questions: int = Field(index=False, default=0)
-    question_ids: str  # Вернуть тип на 'str'
-    answers: str = Field(index=False)
+    indefinite_questions: bool = Field(index=False)
+    # Это поле будет хранить список ID вопросов (как строка JSON в Redis)
+    question_ids: str = Field(index=False)
+    # Это поле хранит ответы пользователя (как строка JSON в Redis)
+    answers: str = Field(default="{}", index=False)
     questions_answered: int = 0
     questions_remaining: int = Field(index=False)
     current_question_index: int = 0
@@ -42,6 +45,20 @@ class TestSession(HashModel):
         except (ValueError, TypeError):
             return datetime.strptime(v, "%Y-%m-%d %H:%M:%S.%f")
 
+    # Добавляем валидаторы для автоматического преобразования при чтении/записи
+    @validator('question_ids', 'answers', pre=True)
+    def validate_json_fields(cls, v):
+        # Если приходит список/словарь (из кода), сериализуем в строку
+        if isinstance(v, (list, dict)):
+            return json.dumps(v)
+        # Если приходит строка (из Redis), просто возвращаем
+            return v
+
+    # При получении объекта из Redis (использование property для десериализации)
+    @property
+    def questions_list(self) -> List[str]:
+        return json.loads(self.question_ids)
+
     class Meta:
         model_key_prefix = "test_session"
 
@@ -51,7 +68,7 @@ class QuestionRedis(HashModel):
     index: int = Field(index=True)
     category: str = Field(index=False)
     content: str = Field(index=False)
-    choices: str  # Вернуть тип на 'str'
+    choices: str = Field(default="{}", index=False)
     correct_answer: str = Field(index=False)
 
     class Meta:

@@ -5,20 +5,24 @@ import time
 from enum import Enum
 from typing import List, Dict, Optional
 from datetime import datetime
+from loguru import logger
 
 from redis_om import get_redis_connection, NotFoundError
+from redis.asyncio import Redis as AsyncRedis # Используем AsyncRedis
 from redis.exceptions import ConnectionError
 from redis import Redis
 from uuid import UUID
 
 from app.models.redis import TestSession, QuestionRedis, SessionStatus
+from app.core.databases import inject_redis_connection
 
-
-def create_session(user_id: uuid.UUID, test_id: uuid.UUID, question_ids: List[str], indefinite_questions: bool,
-                   ip_address: str, redis_client: Redis) -> TestSession:
+@inject_redis_connection
+async def create_session(redis_client: AsyncRedis, user_id: uuid.UUID, test_id: uuid.UUID, question_ids: List[str], indefinite_questions: bool,
+                   ip_address: str) -> TestSession:
     # Явно устанавливаем базу данных перед использованием модели
     TestSession.Meta.database = redis_client
     if not question_ids:
+        logger.error("Attempt to create a session without questions.")
         raise ValueError("Cannot create a session without questions.")
 
     session = TestSession(
@@ -34,27 +38,29 @@ def create_session(user_id: uuid.UUID, test_id: uuid.UUID, question_ids: List[st
         current_question_index=0,
         status=SessionStatus.ACTIVE.value,
     )
-    session.save()
+    await session.save()
+    logger.debug(f"Session object saved to Redis with SID: {session.sid}")
     return session
 
-
-def get_session(session_id: UUID, redis_client: Redis) -> Optional[TestSession]:
+@inject_redis_connection
+async def get_session(redis_client: AsyncRedis, session_id: UUID) -> Optional[TestSession]:
     # Явно устанавливаем базу данных перед использованием модели
     TestSession.Meta.database = redis_client
     try:
-        return TestSession.get(session_id)
+        return await TestSession.get(session_id)
     except NotFoundError:
-        print(f"Session with sid {session_id} not found.")
+        logger.warning(f"Session with sid {session_id} not found.")
         return None
     except Exception as e:
-        print(f"Error getting session: {e}")
+        logger.error(f"Error getting session {session_id}: {e}", exc_info=True)
         return None
 
-
-def update_session_with_answer(session_id: str, question_index: int, answer: str, redis_client: Redis) -> Optional[TestSession]:
+@inject_redis_connection
+async def update_session_with_answer(redis_client: AsyncRedis, session_id: str, question_index: int, answer: str) -> Optional[TestSession]:
     # Явно устанавливаем базу данных перед использованием модели
     TestSession.Meta.database = redis_client
-    session = get_session(session_id, redis_client)
+    # get_session теперь асинхронная и требует await
+    session = await get_session(redis_client, session_id)
     if not session or session.status != SessionStatus.ACTIVE.value:
         return None
 
@@ -67,15 +73,16 @@ def update_session_with_answer(session_id: str, question_index: int, answer: str
     session.last_activity = datetime.now()
     session.answers = json.dumps(answers_dict)
 
-    session.save()
+    await session.save()
     return session
 
 
-def finish_session(session: TestSession, redis_client: Redis) -> Optional[TestSession]:
+@inject_redis_connection
+async def finish_session(redis_client: AsyncRedis, session: TestSession) -> Optional[TestSession]:
     # Явно устанавливаем базу данных перед использованием модели
     TestSession.Meta.database = redis_client
     QuestionRedis.Meta.database = redis_client
-    # УДАЛЯЕМ вызов get_session, так как мы уже получили объект
+
     if session.status == SessionStatus.FINISHED.value:
         return None
 
@@ -85,17 +92,21 @@ def finish_session(session: TestSession, redis_client: Redis) -> Optional[TestSe
 
     question_ids = json.loads(session.question_ids)
 
-    # Получаем вопросы, явно устанавливая базу данных
-    questions = [QuestionRedis.get(qid) for qid in question_ids]
+    # Получаем вопросы асинхронно
+    questions = []
+    for qid in question_ids:
+        questions.append(await QuestionRedis.get(qid))
 
-    score = score_session(session, questions, redis_client)
+    # score_session теперь асинхронная и требует await
+    score = await score_session(redis_client, session, questions)
     session.score = score
-    session.save()
-    print(f"Session {session.sid} finished. Score: {score}")
+    await session.save()
+    logger.info(f"Session {session.sid} finished. Score: {session.score}")
     return session
 
-
-def score_session(session: TestSession, questions: List[QuestionRedis], redis_client: Redis) -> float:
+@inject_redis_connection
+async def score_session(redis_client: AsyncRedis, session: TestSession, questions: List[QuestionRedis]) -> float:
+    # Эта функция является чистым вычислением, но помечена как async для согласованности с декоратором.
     correct_answers = 0
     session_answers = json.loads(session.answers)
     question_map = {q.index: q.correct_answer for q in questions}
@@ -107,8 +118,8 @@ def score_session(session: TestSession, questions: List[QuestionRedis], redis_cl
     total_questions = len(questions)
     return (correct_answers / total_questions) * 100 if total_questions > 0 else 0.0
 
-
-def get_current_question(session: TestSession, redis_client: Redis) -> Optional[QuestionRedis]:
+@inject_redis_connection
+async def get_current_question(redis_client: AsyncRedis, session: TestSession) -> Optional[QuestionRedis]:
     # Явно устанавливаем базу данных перед использованием модели
     QuestionRedis.Meta.database = redis_client
     question_ids = json.loads(session.question_ids)
@@ -117,7 +128,6 @@ def get_current_question(session: TestSession, redis_client: Redis) -> Optional[
 
     current_qid = question_ids[session.current_question_index]
 
-    # Получаем вопрос, используя явно установленную базу данных
-    question_obj = QuestionRedis.get(current_qid)
+    question_obj = await QuestionRedis.get(current_qid)
     question_obj.choices = json.loads(question_obj.choices)
     return question_obj
