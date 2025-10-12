@@ -31,7 +31,7 @@ class TestSession(HashModel):
     questions_remaining: int = Field(index=False)
     current_question_index: int = 0
     status: SessionStatus = SessionStatus.CREATED
-    ip_address: Optional[str] = Field(index=False)
+    ip_address: Optional[str] = Field(index=True)
     last_activity: datetime = Field(default_factory=datetime.utcnow, index=False)
 
     @validator('time_start', 'time_finish', pre=True)
@@ -67,7 +67,7 @@ class QuestionRedis(HashModel):
     question_id: uuid = Field(default_factory=uuid.uuid4, index=True, primary_key=True)
     index: int = Field(index=True)
     category: str = Field(index=False)
-    content: str = Field(index=False)
+    content: str = Field(index=True)
     choices: str = Field(default="{}", index=False)
     correct_answer: str = Field(index=False)
 

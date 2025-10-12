@@ -11,7 +11,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_HOST=db
       - DB_PORT=5432
-      - REDIS_HOST=redis
+      - REDIS_HOST=redis-stack-test
       - REDIS_PORT=6379
       - REDIS_USER=${REDIS_USER:-default}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
@@ -19,7 +19,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      redis-stack-test:
         condition: service_healthy
   db:
      image: mirror.gcr.io/postgres
@@ -39,13 +39,12 @@ services:
        timeout: 5s
        retries: 5
 
-  redis:
-    image: mirror.gcr.io/redis:7-alpine
+  redis-stack-test:
+    image: redis/redis-stack-server:latest
+    container_name: redis_stack_for_tests
     restart: always
     environment:
-      - REDIS_USER=${REDIS_USER:-default}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-    command: [ "redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}" ]
+      - REDIS_ARGS=--requirepass ${REDIS_PASSWORD}
     expose:
       - "6379"
     healthcheck:
@@ -53,6 +52,34 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Добавление отдельного сервиса для запуска тестов
+  tests:
+    build:
+      context: .
+    volumes:
+      - .:/app
+    # Сервис тестов зависит от DB и Redis Stack
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-stack-test:
+        condition: service_healthy
+
+    # Наследуем настройки окружения для подключения к DB и Redis Stack
+    environment:
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=5432
+      # Используем имя сервиса Redis Stack
+      - REDIS_HOST=redis-stack-test
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+
+    # Команда будет задаваться при запуске (см. ниже)
+    entrypoint: ["/usr/local/bin/poetry", "run", "pytest"]
 
 volumes:
    db-data:
