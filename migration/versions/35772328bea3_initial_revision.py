@@ -43,7 +43,7 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_table('cities',
+    op.create_table('settlements',
     sa.Column('name', sa.String(), nullable=False),
     sa.Column('region_id', sa.UUID(), nullable=False),
     sa.Column('id', sa.UUID(), nullable=False),
@@ -65,7 +65,7 @@ def upgrade() -> None:
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-    sa.ForeignKeyConstraint(['city_id'], ['cities.id'], ),
+    sa.ForeignKeyConstraint(['city_id'], ['settlements.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('users',
@@ -97,7 +97,7 @@ def downgrade() -> None:
     op.drop_table('users')
     op.drop_table('schools')
     op.drop_table('role2permission')
-    op.drop_table('cities')
+    op.drop_table('settlements')
     op.drop_table('roles')
     op.drop_table('regions')
     op.drop_table('permissions')
