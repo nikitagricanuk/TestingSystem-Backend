@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from .routers import results, sessions
+from .routers import results, sessions, auth
 
 
 def create_app() -> FastAPI:
@@ -8,6 +8,7 @@ def create_app() -> FastAPI:
     # app.dependency_overrides[get_token_header] = lambda: None
     app.include_router(results.router, prefix="", tags=['results'])
     app.include_router(sessions.router, prefix="", tags=['sessions'])
+    app.include_router(auth.router, prefix="/v1/auth", tags=['auth'])
     return app
 
 
