@@ -17,6 +17,17 @@ class Settings(BaseSettings):
     redis_user: str
     redis_password: str
 
+    # Auth settings
+    auth_session_expire_hours: int = 12
+
+    auth_jwt_access_token_expire_minutes: int = 30  # 30 minutes
+    auth_jwt_refresh_token_expire_minutes: int = 60 * 24 * 7  # 7 days
+    auth_jwt_algorithm: str = "HS256"
+    auth_jwt_secret_key: str = "f81b1e7ed4e9475481d71269232a0edd7217032ce17d4eccf13770680a7f4342"
+    auth_jwt_refresh_secret_key: str = "e3b7f969145c8c041c8845e2f9f0e21a98fcc7c0f7ca8e71a7bf69aa69a14544"
+    auth_jwt_issuer: str = "testing-system-api"
+    auth_jwt_audience: str = "testing-system-spa"
+
     @property
     def get_redis_url(self) -> str:
         return (
