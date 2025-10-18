@@ -15,8 +15,8 @@ class TestUserDAO:
         async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
         async with async_session_maker() as session:
             # --- seed roles ---
-            admin_role = Role(id=uuid.uuid4(), role="admin")
-            student_role = Role(id=uuid.uuid4(), role="student")
+            admin_role = Role(id=uuid.UUID("e39ee8be-9f09-4818-81fc-8ed56ff5ed75"), role="admin")
+            student_role = Role(id=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"), role="student")
 
             # --- seed permissions ---
             perm_read_users = Permission(id=uuid.uuid4(), name="read_users", description="Can read users")
@@ -51,7 +51,7 @@ class TestUserDAO:
             email="john@example.com",
             phone="1234567890",
             password="securepassword123",
-            role=RoleEnum.ADMIN,
+            role=uuid.UUID("e39ee8be-9f09-4818-81fc-8ed56ff5ed75"),
             school_id=None,
             session=test_session
         )
@@ -73,7 +73,7 @@ class TestUserDAO:
             email="mail@newmail.com",
             phone="0987654321",
             password="anotherpassword123",
-            role=RoleEnum.STUDENT,
+            role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
             school_id=None,
             session=test_session
         )
@@ -93,7 +93,7 @@ class TestUserDAO:
             email="test@test.com",
             phone="1122334455",
             password="password123",
-            role=RoleEnum.STUDENT,
+            role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
             school_id=None,
             session=test_session
         )
@@ -117,7 +117,7 @@ class TestUserDAO:
             email="emailtest@test.com",
             phone="2233445566",
             password="password456",
-            role=RoleEnum.STUDENT,
+            role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
             school_id=None,
             session=test_session
         )
@@ -140,7 +140,7 @@ class TestUserDAO:
             email="test@test.com",
             phone="3344556677",
             password="password789",
-            role=RoleEnum.STUDENT,
+            role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
             school_id=None,
             session=test_session
         )
@@ -159,7 +159,7 @@ class TestUserDAO:
             email="test@test.com",
             phone="4455667788",
             password="password101",
-            role=RoleEnum.STUDENT,
+            role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
             school_id=None,
             session=test_session
         )
@@ -177,7 +177,7 @@ class TestUserDAO:
             email="email@email.com",
             phone="5566778899",
             password="password202",
-            role=RoleEnum.STUDENT,
+            role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
             school_id=None,
             session=test_session
         )
@@ -194,7 +194,7 @@ class TestUserDAO:
             email="max@email.com",
             phone="55646778899",
             password="password202",
-            role=RoleEnum.ADMIN,
+            role=uuid.UUID("e39ee8be-9f09-4818-81fc-8ed56ff5ed75"),
             school_id=None,
             session=test_session
         )
@@ -212,7 +212,7 @@ class TestUserDAO:
             email="ada.admin@example.com",
             phone="100200300",
             password="s3cret",
-            role=RoleEnum.ADMIN,
+            role=uuid.UUID("e39ee8be-9f09-4818-81fc-8ed56ff5ed75"),
             school_id=None,
             session=test_session,
         )
@@ -231,7 +231,7 @@ class TestUserDAO:
             email="stu.dent@example.com",
             phone="400500600",
             password="passw0rd",
-            role=RoleEnum.STUDENT,
+            role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
             school_id=None,
             session=test_session,
         )
@@ -250,7 +250,7 @@ class TestUserDAO:
             email="nora@example.com",
             phone="777777777",
             password="pw",
-            role=RoleEnum.ADMIN,
+            role=uuid.UUID("e39ee8be-9f09-4818-81fc-8ed56ff5ed75"),
             school_id=None,
             session=test_session,
         )
