@@ -60,7 +60,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('role_id', 'permission_id')
     )
     op.create_table('schools',
-    sa.Column('school', sa.String(), nullable=False),
+    sa.Column('full_name', sa.String(), nullable=False),
     sa.Column('city_id', sa.UUID(), nullable=False),
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),

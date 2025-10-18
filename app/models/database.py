@@ -42,28 +42,30 @@ class Permission(Base):
 class Region(Base):
     __tablename__ = "regions"
 
-    region: Mapped[str] = mapped_column(String, nullable=False)
+    region: Mapped[str] = mapped_column(String, nullable=False, unique=True)
 
-    cities: Mapped[list["City"]] = relationship("City", back_populates="region")
+    settlements: Mapped[list["Settlement"]] = relationship("Settlement", back_populates="region")
 
 
-class City(Base):
-    __tablename__ = "cities"
+class Settlement(Base):
+    __tablename__ = "settlements"
 
-    name: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    type: Mapped[str] = mapped_column(String, nullable=False)
     region_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("regions.id"), nullable=False)
 
-    region: Mapped["Region"] = relationship("Region", back_populates="cities")
-    schools: Mapped[list["School"]] = relationship("School", back_populates="city")
+    region: Mapped["Region"] = relationship("Region", back_populates="settlements")
+    schools: Mapped[list["School"]] = relationship("School", back_populates="settlement")
 
 
 class School(Base):
     __tablename__ = "schools"
 
-    school: Mapped[str] = mapped_column(String, nullable=False)
-    city_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("cities.id"), nullable=False)
+    full_name: Mapped[str] = mapped_column(String, nullable=False)
+    short_name: Mapped[str] = mapped_column(String, nullable=True)
+    city_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("settlements.id"), nullable=False)
 
-    city: Mapped["City"] = relationship("City", back_populates="schools")
+    settlement: Mapped["Settlement"] = relationship("Settlement", back_populates="schools")
     users: Mapped[list["User"]] = relationship("User", back_populates="school")
 
 
