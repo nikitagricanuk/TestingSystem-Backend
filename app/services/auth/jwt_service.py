@@ -2,11 +2,13 @@ from dataclasses import dataclass
 from datetime import timedelta, datetime
 from typing import Any, Optional, Dict
 from uuid import uuid4
+import inspect
 
 from jwcrypto import jwt as jw_jwt, jwk
 
 from app.core.config import settings
 from app.utils.time import get_current_time, datetime_to_unix
+from .sessions import Session
 
 
 @dataclass(frozen=True)
@@ -32,13 +34,18 @@ class JWTService:
                  refresh_jwk: Optional[jwk.JWK] = None,
                  access_secret: Optional[str] = None,
                  refresh_secret: Optional[str] = None,
-                 leeway_seconds: int = 0) -> None:
+                 leeway_seconds: int = 0,
+                 token_store: Optional[Any] = None,
+                 token_prefix: str = "rt:" ) -> None:
         self.issuer = issuer
         self.audience = audience
         self.algorithm = algorithm
         self.access_ttl_minutes = access_ttl_minutes
         self.refresh_ttl_minutes = refresh_ttl_minutes
         self.leeway_seconds = leeway_seconds
+
+        self.token_store = token_store
+        self.token_prefix = token_prefix
 
         # Accept either JWKs **or** raw secrets; derive keys if secrets are provided.
         if access_jwk and refresh_jwk:
@@ -56,16 +63,48 @@ class JWTService:
             *,
             access_extra: Optional[Dict[str, Any]] = None,
             refresh_extra: Optional[Dict[str, Any]] = None,
+            session_ip: Optional[str] = None,
+            session_ua: Optional[str] = None,
     ) -> TokenPair:
         access_token = await self.__create_access_token(subject, extra_claims=access_extra)
         refresh_token = await self.__create_refresh_token(subject, extra_claims=refresh_extra)
+
+        # Persist refresh token fingerprint (by jti) to Redis-like store for allow-list validation
+        try:
+            _rt = jw_jwt.JWT(jwt=refresh_token, key=self.refresh_jwk)
+            _claims = _rt.claims
+            _data = jw_jwt.json_decode(_claims) if isinstance(_claims, str) else _claims
+            _jti = _data.get("jti")
+            _sub = _data.get("sub")
+            _exp = int(_data.get("exp")) if _data.get("exp") is not None else None
+            if _jti and _sub and _exp is not None:
+                await self.__store_refresh_record(_jti, _sub, _exp)
+        except Exception:
+            # Storing is best-effort; token remains valid cryptographically even if store is unavailable
+            pass
+
+        # Optionally create a server-side Session bound to this refresh token
+        try:
+            if session_ip is not None:
+                # subject is expected to be user id; cast to int if possible
+                try:
+                    user_id_int = int(str(subject))
+                except Exception:
+                    user_id_int = None
+                if user_id_int is not None:
+                    Session.create(user_id=user_id_int, ip=session_ip, refresh_token=refresh_token, ua=session_ua)
+        except Exception:
+            # Session persistence shouldn't break token minting
+            pass
+
         return TokenPair(access_token=access_token, refresh_token=refresh_token,
                          access_token_expires_at=get_current_time() + timedelta(minutes=self.access_ttl_minutes),
                          refresh_token_expires_at=get_current_time() + timedelta(minutes=self.refresh_ttl_minutes))
 
     async def validate(self, token_str: str, *, expected_scope: Optional[str] = None) -> Dict[str, Any]:
-        """Verify signature with both keys (access then refresh) and return claims as dict.
-        The caller can also pin `expected_scope` to enforce correct token kind.
+        """Verify signature with both keys (access then refresh), validate registered claims,
+        and for *refresh* tokens additionally enforce allow-list presence in Redis (if configured).
+        Returns the token claims as a dict or raises `ValueError`.
         """
         last_err: Optional[Exception] = None
         for key, kind in ((self.access_jwk, "access"), (self.refresh_jwk, "refresh")):
@@ -73,13 +112,76 @@ class JWTService:
                 tok = jw_jwt.JWT(jwt=token_str, key=key)
                 claims = tok.claims
                 data = jw_jwt.json_decode(claims) if isinstance(claims, str) else claims
-                # if expected_scope provided, validate; otherwise accept any and validate later
                 self.__validate_registered_claims(data, expected_scope=expected_scope)
+
+                # If it's a refresh token, validate presence in Redis allow-list (by jti)
+                if data.get("scope") == "refresh":
+                    jti = data.get("jti")
+                    if not jti:
+                        raise ValueError("Missing jti for refresh token")
+                    allowed = await self.__check_refresh_record(jti)
+                    if not allowed:
+                        raise ValueError("Refresh token is revoked or unknown")
                 return data
-            except Exception as e:  # signature mismatch or invalid claims
+            except Exception as e:
                 last_err = e
                 continue
         raise ValueError(f"Invalid token: {last_err}")
+    async def __store_refresh_record(self, jti: str, subject: str, exp_ts: int) -> None:
+        """Allow-list a refresh token by its JTI with an expiry matching the token's exp."""
+        if not self.token_store:
+            return
+        ttl = max(0, exp_ts - datetime_to_unix(get_current_time()))
+        key = f"{self.token_prefix}{jti}"
+        value = subject
+        try:
+            setex = getattr(self.token_store, "setex", None)
+            if not setex:
+                return
+            if inspect.iscoroutinefunction(setex):
+                await setex(key, ttl, value)
+            else:
+                setex(key, ttl, value)
+        except Exception:
+            # Best-effort: swallow store errors
+            pass
+
+    async def __check_refresh_record(self, jti: str) -> bool:
+        """Return True if the refresh token JTI is present in the allow-list (or if no store configured)."""
+        if not self.token_store:
+            return True
+        key = f"{self.token_prefix}{jti}"
+        try:
+            get_fn = getattr(self.token_store, "get", None)
+            if not get_fn:
+                return True
+            if inspect.iscoroutinefunction(get_fn):
+                val = await get_fn(key)
+            else:
+                val = get_fn(key)
+            return bool(val)
+        except Exception:
+            # If store is down, fail-safe to False for refresh validation
+            return False
+
+    async def __delete_refresh_record(self, jti: str) -> None:
+        if not self.token_store:
+            return
+        key = f"{self.token_prefix}{jti}"
+        try:
+            delete_fn = getattr(self.token_store, "delete", None)
+            if not delete_fn:
+                return
+            if inspect.iscoroutinefunction(delete_fn):
+                await delete_fn(key)
+            else:
+                delete_fn(key)
+        except Exception:
+            pass
+
+    async def revoke_refresh(self, jti: str) -> None:
+        """Public helper to revoke a refresh token (remove from allow-list)."""
+        await self.__delete_refresh_record(jti)
 
     # ---------- token creation ----------
     def __build_claims(self, subject: str, ttl_minutes: int, scope: str, extra: Optional[Dict[str, Any]] = None) -> \
@@ -150,6 +252,16 @@ class JWTService:
         if now_ts - self.leeway_seconds >= exp:
             raise ValueError("Token expired (exp)")
 
+    async def validate_refresh_and_get_session(self, refresh_token: str) -> tuple[Dict[str, Any], Session]:
+        """Validate the refresh token cryptographically + allow-list, then return (claims, Session).
+        Raises ValueError if invalid or if no active, non-expired session found for this token.
+        """
+        claims = await self.validate(refresh_token, expected_scope="refresh")
+        sess = Session.validate(refresh_token)
+        if not sess:
+            raise ValueError("Refresh token valid, but session not found / inactive / expired")
+        return claims, sess
+
     @staticmethod
     def __jwk_from_secret(secret: str) -> jwk.JWK:
         """Create a symmetric JWK from a secret string.
@@ -168,6 +280,8 @@ JWT = JWTService(
     refresh_ttl_minutes=settings.auth_jwt_refresh_token_expire_minutes,
     access_secret=settings.auth_jwt_secret_key,
     refresh_secret=settings.auth_jwt_refresh_secret_key,
+    token_store=getattr(settings, "redis", None),  # expects a redis-like client (sync or asyncio)
+    token_prefix=getattr(settings, "auth_refresh_token_prefix", "rt:")
 )
 
 
