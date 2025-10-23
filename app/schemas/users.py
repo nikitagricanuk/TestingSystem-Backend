@@ -1,7 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from pydantic import BaseModel
+
+from app.utils.time import get_current_time
 
 
 class User(BaseModel):
@@ -27,3 +29,21 @@ class UserCreate(BaseModel):
     is_active: bool = True
     role: UUID | None = None
     additional_permissions: list[str] = []
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class LoginResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+    access_token_expires_at: str
+    access_token_expires_at_unix: int
+
+    refresh_token_expires_at: str
+    refresh_token_expires_at_unix: int
+
+    issued_at: str = get_current_time().isoformat()
+    issued_at_unix: int = get_current_time().timestamp()
