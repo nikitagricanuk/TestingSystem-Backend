@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import Any, Optional, Dict
 from uuid import uuid4
 
@@ -13,6 +13,8 @@ from app.utils.time import get_current_time, datetime_to_unix
 class TokenPair:
     access_token: str
     refresh_token: str
+    access_token_expires_at: datetime
+    refresh_token_expires_at: datetime
 
 
 class JWTService:
@@ -57,7 +59,9 @@ class JWTService:
     ) -> TokenPair:
         access_token = await self.__create_access_token(subject, extra_claims=access_extra)
         refresh_token = await self.__create_refresh_token(subject, extra_claims=refresh_extra)
-        return TokenPair(access_token=access_token, refresh_token=refresh_token)
+        return TokenPair(access_token=access_token, refresh_token=refresh_token,
+                         access_token_expires_at=get_current_time() + timedelta(minutes=self.access_ttl_minutes),
+                         refresh_token_expires_at=get_current_time() + timedelta(minutes=self.refresh_ttl_minutes))
 
     async def validate(self, token_str: str, *, expected_scope: Optional[str] = None) -> Dict[str, Any]:
         """Verify signature with both keys (access then refresh) and return claims as dict.
