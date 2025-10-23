@@ -30,6 +30,16 @@ class UserCreate(BaseModel):
     role: UUID | None = None
     additional_permissions: list[str] = []
 
+class UserCreateStudent(BaseModel):
+    first_name: str
+    middle_name: str | None = None
+    second_name: str
+    age: int | None = None
+    phone: str | None = None
+    school_id: str | None = None
+    email: str
+    password: str
+
 class LoginRequest(BaseModel):
     email: str
     password: str

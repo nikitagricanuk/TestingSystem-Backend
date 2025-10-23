@@ -4,6 +4,7 @@ from app.core.databases import connection
 from app.core.log import setup_logger
 from app.models.database import User, Role, Permission, role2permission
 from sqlalchemy import select, exists, func
+from sqlalchemy.orm import selectinload
 
 from typing import Optional, Mapping, Any
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,7 +71,7 @@ class UserDAO:
             raise
 
     @connection
-    async def get_role_id(self, role: RoleEnum, session: Optional[AsyncSession] = None):
+    async def get_role_id(self, role: RoleEnum, session: Optional[AsyncSession] = None) -> UUID:
         role_obj = await session.execute(
             select(Role).where(Role.role == role.value)
         )
@@ -82,7 +83,21 @@ class UserDAO:
 
     @connection
     async def get_user_by_id(self, user_id: UUID | str, session: Optional[AsyncSession] = None) -> Optional[User]:
-        return await session.get(User, user_id)
+        result = await session.execute(
+            select(User)
+            .options(selectinload(User.role).selectinload(Role.permissions))
+            .where(User.id == user_id)
+        )
+        return result.scalar_one_or_none()
+
+    @connection
+    async def get_user_with_role_and_permissions(self, user_id: UUID | str, session: Optional[AsyncSession] = None) -> Optional[User]:
+        result = await session.execute(
+            select(User)
+            .options(selectinload(User.role).selectinload(Role.permissions))
+            .where(User.id == user_id)
+        )
+        return result.scalar_one_or_none()
 
     @connection
     async def get_user_by_email(self, email: str, session: Optional[AsyncSession] = None) -> Optional[User]:
