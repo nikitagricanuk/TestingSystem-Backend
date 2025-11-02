@@ -1,6 +1,6 @@
 from sqlalchemy import (
     String, Integer, Boolean, ForeignKey, Text,
-    UniqueConstraint, Table, Column
+    UniqueConstraint, Table, Column, Index
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -41,16 +41,22 @@ class Permission(Base):
 
 class Region(Base):
     __tablename__ = "regions"
+    __table_args__ = (
+        Index('regions_region_key', 'region', unique=True),
+    )
 
-    region: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    region: Mapped[str] = mapped_column(String, nullable=False)
 
     settlements: Mapped[list["Settlement"]] = relationship("Settlement", back_populates="region")
 
 
 class Settlement(Base):
     __tablename__ = "settlements"
+    __table_args__ = (
+        Index('settlements_natural_key', 'name', 'type', 'region_id', unique=True),
+    )
 
-    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
     type: Mapped[str] = mapped_column(String, nullable=False)
     region_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("regions.id"), nullable=False)
 
@@ -76,9 +82,8 @@ class User(Base):
         UniqueConstraint("phone_number"),
     )
 
-    first_name: Mapped[str] = mapped_column(String, nullable=False)
-    second_name: Mapped[str] = mapped_column(String, nullable=False)
-    middle_name: Mapped[str] = mapped_column(String, nullable=False)
+    full_name: Mapped[str] = mapped_column(String, nullable=False)
+    nickname: Mapped[str] = mapped_column(String, nullable=False)
     age: Mapped[int] = mapped_column(Integer, nullable=False)
     email: Mapped[str] = mapped_column(String, nullable=True)
     phone_number: Mapped[str] = mapped_column(String, nullable=True)
