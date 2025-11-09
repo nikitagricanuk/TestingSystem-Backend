@@ -40,7 +40,7 @@ async def post_tests_test_id_start(redis_client: AsyncRedis, test_id: UUID) -> S
         return Session(sid=session.sid, test_id=session.test_id, user_id=session.user_id,
                        time_start=datetime.now(timezone.utc), time_start_unix=int(datetime.now(timezone.utc).timestamp()),
                        time_finish=None, time_finish_unix=None, duration_seconds=None,
-                       indefinite_questions=bool(session.indefinite_questions), ip_address="127.0.0.1",
+                       indefinite_questions=session.indefinite_questions, ip_address="127.0.0.1",
                        questions_remaining=session.questions_remaining,
                        current_question_index=session.current_question_index,
                        status=session.status, last_activity_unix=int(datetime.now(timezone.utc).timestamp()),

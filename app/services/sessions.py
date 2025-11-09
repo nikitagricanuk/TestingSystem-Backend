@@ -25,11 +25,13 @@ async def create_session(redis_client: AsyncRedis, user_id: uuid.UUID, test_id: 
         logger.error("Attempt to create a session without questions.")
         raise ValueError("Cannot create a session without questions.")
 
+    question_ids_json = json.dumps([str(q_id) for q_id in question_ids])
+
     session = TestSession(
-        sid=str(uuid.uuid4()),
+        sid=uuid.uuid4(),
         test_id=test_id,
         user_id=user_id,
-        question_ids=json.dumps(question_ids),
+        question_ids=question_ids_json,
         questions_remaining=len(question_ids),
         indefinite_questions=int(indefinite_questions),
         ip_address=ip_address,
@@ -60,7 +62,7 @@ async def update_session_with_answer(redis_client: AsyncRedis, session_id: str, 
     # Явно устанавливаем базу данных перед использованием модели
     TestSession.Meta.database = redis_client
     # get_session теперь асинхронная и требует await
-    session = await get_session(redis_client, session_id)
+    session = await get_session(session_id)
     if not session or session.status != SessionStatus.ACTIVE.value:
         return None
 
@@ -98,7 +100,7 @@ async def finish_session(redis_client: AsyncRedis, session: TestSession) -> Opti
         questions.append(await QuestionRedis.get(qid))
 
     # score_session теперь асинхронная и требует await
-    score = await score_session(redis_client, session, questions)
+    score = await score_session(session, questions)
     session.score = score
     await session.save()
     logger.info(f"Session {session.sid} finished. Score: {session.score}")

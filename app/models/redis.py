@@ -5,7 +5,7 @@ from typing import List, Optional
 from enum import Enum
 
 from pydantic import Field, validator
-from redis_om import HashModel
+from aredis_om import HashModel, JsonModel
 
 
 class SessionStatus(str, Enum):
@@ -22,9 +22,9 @@ class TestSession(HashModel):
     time_start: datetime = Field(default_factory=datetime.utcnow)
     time_finish: Optional[datetime] = None
     duration: int = 0
-    indefinite_questions: bool = Field(index=False)
+    indefinite_questions: int = Field(index=False)
     # Это поле будет хранить список ID вопросов (как строка JSON в Redis)
-    question_ids: str = Field(index=False)
+    question_ids: str = Field(index=False, default=json.dumps([]))
     # Это поле хранит ответы пользователя (как строка JSON в Redis)
     answers: str = Field(default="{}", index=False)
     questions_answered: int = 0
@@ -52,7 +52,7 @@ class TestSession(HashModel):
         if isinstance(v, (list, dict)):
             return json.dumps(v)
         # Если приходит строка (из Redis), просто возвращаем
-            return v
+        return v
 
     # При получении объекта из Redis (использование property для десериализации)
     @property
@@ -64,7 +64,7 @@ class TestSession(HashModel):
 
 
 class QuestionRedis(HashModel):
-    question_id: uuid = Field(default_factory=uuid.uuid4, index=True, primary_key=True)
+    question_id: uuid.UUID = Field(default_factory=uuid.uuid4, index=True, primary_key=True)
     index: int = Field(index=True)
     category: str = Field(index=False)
     content: str = Field(index=True)
