@@ -1,0 +1,1096 @@
+openapi: 3.1.0
+info:
+  title: Student Testing System API
+  version: 1.0.0
+  description: API specification for a high-load student testing system.
+servers:
+  - url: https://api.example.com/v1
+
+tags:
+  - name: Auth
+    description: Authentication and user management
+  - name: Tests
+    description: Test metadata and question management
+  - name: Sessions
+    description: Test sessions and progress tracking
+  - name: Results
+    description: Test results, certificates, and recommendations
+  - name: Leaderboard
+    description: Public leaderboard and rankings
+
+paths:
+  /auth/login:
+    post:
+      summary: Login, get bearer token
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Auth tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  username:
+                    type: string
+                  token:
+                    type: string
+                  refresh_token:
+                    type: string
+                  created_at:
+                    type: string
+                    format: date-time
+
+  /auth/logout:
+    post:
+      summary: Logout current user
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Logged out successfully
+
+  /auth/users/me:
+    get:
+      summary: Get current user info
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+    patch:
+      summary: Update current user info
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: Updated user info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+  
+  /auth/users/create:
+    post:
+      summary: Create new user account
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: Created user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+                
+  /auth/users:
+    get:
+      summary: List all users
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Listed all users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+                  
+  /auth/users/{id}:
+    get:
+      summary: Get info for a specific user
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+    patch:
+      summary: Edit user info
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+    delete:
+      summary: Delete user
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDelete'
+  
+  /tests:
+    get:
+      summary: Get list of tests. Depends on users permissions
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Test'
+                  
+  /tests/{id}:
+    get:
+      summary: View test general info
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Test'
+    patch:
+      summary: Edit test info
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestUpdate'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Test'
+    delete:
+      summary: Delete test
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestDelete'
+  
+  /tests/create:
+    post:
+      summary: Create new test
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestUpdate'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Test'
+                
+  /tests/{test-id}/question/list:
+    get:
+      summary: List all questions in the test
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: test-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Question'
+                  
+  /tests/{test-id}/question/create:
+    post:
+      summary: Create new question inside the test
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: test-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionUpdate'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Question'
+  
+  /tests/{test-id}/question/{question-id}:
+    get:
+      summary: View question details
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: test-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: question-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Question'
+    patch:
+      summary: Edit question
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: test-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: question-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionUpdate'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Question'
+    delete:
+      summary: Delete the question
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: test-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: question-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionDelete'
+  
+  /tests/{test-id}/question/upload:
+    put:
+      summary: Upload tests via TeX/XML file
+      tags: [Tests]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: test-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Created
+  
+  /tests/{testId}/start:
+    post:
+      summary: Start new test session
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: testId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: New session started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+                
+  /tests/session/list:
+    get: # TODO: add query filter
+      summary: Get session list
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: New session started
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Session'
+
+  /tests/session/{sid}:
+    get:
+      summary: Get session info
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+    delete:
+      summary: Cancel session
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDelete'
+  
+  /tests/session/{sid}/question/list:
+    get:
+      summary: List all questions
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SessionQuestion'
+  
+  /tests/session/{sid}/question/{question-id}:
+    get:
+      summary: Get next question in session
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: question-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionQuestion'
+
+  /tests/session/{sid}/question/next:
+    get:
+      summary: Get next question in session
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Next question
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionQuestion'
+                
+  /tests/session/{sid}/question/prev:
+    get:
+      summary: Get previous question in session
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Previous question
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionQuestion'
+                
+  /tests/session/{sid}/question/{question-id}/answer:
+    post:
+      summary: Submit answer to the question
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: question-id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Submitted
+          
+  /tests/session/{sid}/submit:
+    post:
+      summary: Submit answers and finish the session
+      tags: [Sessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Submitted
+
+  /tests/result/{id}:
+    get:
+      summary: Get test result by ID
+      tags: [Results]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Result object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Result'
+
+  /tests/leaderboard:
+    get:
+      summary: Get anonymized leaderboard
+      tags: [Leaderboard]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Leaderboard list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LeaderboardEntry'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: OAuth
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        is_active:
+          type: boolean
+        role:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        created_at_unix:
+          type: integer
+          format: timestamp
+        updated_at:
+          type: string
+          format: date-time
+        updated_at_unix:
+          type: integer
+
+    UserCreate:
+      type: object
+      properties:
+        first_name:
+          type: string
+        middle_name:
+          type: string
+        last_name:
+          type: string
+        age:
+          type: integer
+        phone:
+          type: string
+        school_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        password:
+          type: string
+        is_active:
+          type: boolean
+        role:
+          type: string
+        additional_permissions:
+          type: array
+          items:
+            type: string
+
+    UserCreateStudent:
+      type: object
+      properties:
+        first_name:
+          type: string
+        middle_name:
+          type: string
+        last_name:
+          type: string
+        age:
+          type: integer
+        phone:
+          type: string
+        school_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        password:
+          type: string
+
+    UserUpdate:
+      type: object
+      properties:
+        first_name:
+          type: string
+        middle_name:
+          type: string
+        last_name:
+          type: string
+        age:
+          type: integer
+        phone:
+          type: string
+        school_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        password:
+          type: string
+        is_active:
+          type: boolean
+        role:
+          type: string
+        additional_permissions:
+          type: array
+          items:
+            type: string
+            
+    UserDelete:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+
+    Session:
+      type: object
+      properties:
+        sid:
+          type: string
+          format: uuid
+        time_start:
+          type: string
+          format: date-time
+        time_start_unix:
+          type: integer
+        time_finish:
+          type: string
+          format: date-time
+        time_finish_unix:
+          type: integer
+        duration_seconds:
+          type: integer
+        time_left_seconds:
+          type: integer
+        total_questions:
+          type: integer
+        questions_answered:
+          type: integer
+        questions_remaining:
+          type: integer
+        current_question_index:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [active, completed, expired]
+        is_submitted:
+          type: boolean
+        score:
+          type: number
+          format: float
+          nullable: true
+        test_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        ip_address:
+          type: string
+        device_type:
+          type: string
+        last_activity_unix:
+          type: integer
+          
+    SessionDelete:
+      type: object
+      properties:
+        sid:
+          type: string
+          format: uuid
+        deleted_at:
+          type: string
+          format: date-time
+        deleted_at_unix:
+          type: integer
+          format: timestamp
+
+    
+    Test:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        subcategory:
+          type: string
+        number_of_questions:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        created_at_unix:
+          type: integer
+          format: timestamp
+        updated_at:
+          type: string
+          format: date-time
+        updated_at_unix:
+          type: integer
+          format: timestamp
+          
+    TestUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        subcategory:
+          type: string
+    
+    TestDelete:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        deleted_at:
+          type: string
+          format: date-time
+        deleted_at_unix:
+          type: integer
+          format: timestamp
+
+    SessionQuestion:
+      type: object
+      properties:
+        index:
+          type: integer
+        question:
+          type: string
+        status:
+          type: string
+          
+    Question:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        question:
+          type: string
+        category:
+          type: string
+        subcategory:
+          type: string
+        answers:
+          type: array
+          items:
+            type: object
+            properties:
+              answer:
+                type: string
+        correct_answer:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        created_at_unix:
+          type: integer
+          format: timestamp
+        updated_at:
+          type: string
+          format: date-time
+        updated_at_unix:
+          type: integer
+          format: timestamp
+          
+    QuestionUpdate:
+      type: object
+      properties:
+        question:
+          type: string
+        category:
+          type: string
+        subcategory:
+          type: string
+        answers:
+          type: array
+          items:
+            type: object
+            properties:
+              answer:
+                type: string
+        correct_answer:
+          type: string
+          
+    QuestionDelete:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        question:
+          type: string
+        deleted_at:
+          type: string
+          format: date-time
+        deleted_at_unix:
+          type: integer
+          format: timestamp
+
+    Result:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        score:
+          type: number
+          format: float
+          nullable: true
+        certificate_available:
+          type: boolean
+        certificate_link:
+          type: string
+          nullable: true
+        recommendations:
+          type: array
+          items:
+            type: string
+        test_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        time_start:
+          type: string
+          format: date-time
+        time_finish:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+        rank:
+          type: integer
+          nullable: true
+        total_questions:
+          type: integer
+        correct_answers:
+          type: integer
+        group_scores:
+          type: array
+          items:
+            type: object
+            properties:
+              group:
+                type: string
+              score:
+                type: number
+              total:
+                type: integer
+
+    LeaderboardEntry:
+      type: object
+      properties:
+        rank:
+          type: integer
+        nickname:
+          type: string
+        score:
+          type: number
+        test_id:
+          type: string
+          format: uuid
+        group_scores:
+          type: array
+          items:
+            type: object
+            properties:
+              group:
+                type: string
+              score:
+                type: number
+              total:
+                type: integer
+
