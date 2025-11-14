@@ -1,4 +1,3 @@
-# tests/test_auth_endpoints.py
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -69,6 +68,8 @@ def _fake_user(
         created_at=datetime.now(timezone.utc),
         updated_at=None,
         password="hashed",
+        full_name="Ivan Sergeevich Petrov",
+        nickname="Ivan",
     )
 
     if include_permissions:
@@ -111,7 +112,7 @@ class FakeJWT:
         self._user_id = user_id
         self.revoked = []
 
-    async def create(self, *, subject: str, access_extra: dict, refresh_extra: dict, session_ip: str):
+    async def create(self, *, subject: str, access_extra: dict | None = None, refresh_extra: dict | None = None, session_ip: str | None = None):
         # subject == user.id
         return FakeTokenPair()
 
@@ -152,6 +153,10 @@ def patch_userdao(monkeypatch):
     async def fake_get_user_with_role_and_permissions(self, uid: str):
         return state.get("user_with_perms")
 
+    async def fake_get_user_by_id(self, uid: str):
+        return state.get("user_with_perms")
+
+
     async def fake_create(self, **kwargs):
         # Emulate ORM returned object with role relation if provided
         role = kwargs.get("role")
@@ -164,6 +169,8 @@ def patch_userdao(monkeypatch):
         return SimpleNamespace(
             id=str(uuid4()),
             email=kwargs["email"],
+            full_name=kwargs.get("full_name"),
+            nickname=kwargs.get("nickname"),
             is_active=True,
             role=role_obj,
             created_at=datetime.now(timezone.utc),
@@ -176,6 +183,7 @@ def patch_userdao(monkeypatch):
 
     monkeypatch.setattr(UserDAO, "get_user_by_email", fake_get_user_by_email, raising=False)
     monkeypatch.setattr(UserDAO, "get_user_with_role_and_permissions", fake_get_user_with_role_and_permissions, raising=False)
+    monkeypatch.setattr(UserDAO, "get_user_by_id", fake_get_user_by_id, raising=False)
     monkeypatch.setattr(UserDAO, "create", fake_create, raising=False)
     monkeypatch.setattr(UserDAO, "get_role_id", fake_get_role_id, raising=False)
 
@@ -230,7 +238,7 @@ def test_login_invalid_credentials_401(client: TestClient, patch_userdao, jwt_ov
 
 
 def test_me_unauthorized_401(client: TestClient):
-    res = client.get("/v1/auth/me")
+    res = client.get("/v1/auth/users/me")
     assert res.status_code in (401, 403)
     assert "Not authenticated" in res.json()["detail"] or res.json()["detail"]
 
@@ -241,7 +249,7 @@ def test_me_success_with_bearer(client: TestClient, patch_userdao, jwt_override)
     patch_userdao["user_with_perms"] = _fake_user(user_id=user_id, role_name="admin")
 
     res = client.get(
-        "/v1/auth/me",
+        "/v1/auth/users/me",
         headers={"Authorization": "Bearer valid-token-irrelevant-to-fake"},
     )
     assert res.status_code == 200
@@ -262,7 +270,7 @@ def test_me_invalid_token_401(client: TestClient, patch_userdao, jwt_override, m
         raise ValueError("Invalid token: Verification failed")
     monkeypatch.setattr(fake_jwt, "validate", bad_validate, raising=False)
 
-    res = client.get("/v1/auth/me", headers={"Authorization": "Bearer INVALID"})
+    res = client.get("/v1/auth/users/me", headers={"Authorization": "Bearer INVALID"})
     assert res.status_code == 401
     assert "Invalid token" in res.json()["detail"]
 
@@ -292,13 +300,12 @@ def test_signup_student_success(client: TestClient, patch_userdao):
     res = client.post(
         "/v1/auth/signup",
         json={
-            "first_name": "Ivan",
-            "middle_name": "Sergeevich",
-            "second_name": "Petrov",
+            "full_name": "Ivan Sergeevich Petrov",
+            "nickname": "Ivan",
             "age": 17,
             "email": "ivan.petrov@example.com",
             "phone": "+79990000000",
-            "password": "123",
+            "password": "secret123",
             "school_id": str(uuid4()),
         },
     )
@@ -313,9 +320,8 @@ def test_create_user_success(client: TestClient, patch_userdao):
     res = client.post(
         "/v1/auth/users/create",
         json={
-            "first_name": "Petr",
-            "middle_name": "Ivanovich",
-            "second_name": "Sidorov",
+            "full_name": "Petr Ivanovich Sidorov",
+            "nickname": "Petr",
             "age": 28,
             "email": "p.sidorov@example.com",
             "phone": "+79991112233",
