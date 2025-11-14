@@ -1,98 +1,84 @@
-from sqlalchemy import (
-    String, Integer, Boolean, ForeignKey, Text,
-    UniqueConstraint, Table
-)
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-import uuid
+from datetime import datetime, timezone
+from uuid import UUID
+
+from pydantic import BaseModel
+
+from app.utils.time import get_current_time
 
 
-class Base(DeclarativeBase):
-    pass
+class User(BaseModel):
+    id: UUID
+    nickname: str
+    email: str
+    is_active: bool
+    role: str | None = None
+    created_at: datetime
+    created_at_unix: int
+    updated_at: datetime | None = None
+    updated_at_unix: int | None = None
 
+class UserShort(BaseModel):
+    id: UUID
+    full_name: str
+    email: str
+    is_active: bool
+    role: str | None = None
 
-# Association table for role and permission (many-to-many)
-role2permission = Table(
-    "role2permission",
-    Base.metadata,
-    mapped_column("role_id", UUID(as_uuid=True), ForeignKey("roles.id"), primary_key=True),
-    mapped_column("permission_id", UUID(as_uuid=True), ForeignKey("permissions.id"), primary_key=True),
-)
+class UserFull(User):
+    full_name: str
+    age: int | None = None
+    phone: str | None = None
+    school_id: UUID | None = None
+    permissions: list[str] = []
 
+class UserCreate(BaseModel):
+    full_name: str
+    nickname: str
+    age: int | None = None
+    phone: str | None = None
+    school_id: str | None = None
+    email: str
+    password: str
+    is_active: bool = True
+    role: UUID | None = None
+    additional_permissions: list[str] = []
 
-class Role(Base):
-    __tablename__ = "roles"
+class UserCreateStudent(BaseModel):
+    nickname: str
+    full_name: str
+    age: int | None = None
+    phone: str | None = None
+    school_id: UUID | None = None
+    email: str
+    password: str
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    role: Mapped[str] = mapped_column(String, nullable=False)
+class UserUpdate(BaseModel):
+    first_name: str
+    middle_name: str | None = None
+    last_name: str
+    age: int | None = None
+    phone: str | None = None
+    school_id: str | None = None
+    email: str
+    password: str
+    is_active: bool = True
+    role: UUID | None = None
+    additional_permissions: list[str] = []
 
-    users: Mapped[list["User"]] = relationship("User", back_populates="role")
-    permissions: Mapped[list["Permission"]] = relationship(
-        "Permission", secondary=role2permission, back_populates="roles"
-    )
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
+class LoginResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
 
-class Permission(Base):
-    __tablename__ = "permissions"
+    access_token_expires_at: str
+    access_token_expires_at_unix: int
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_expires_at: str
+    refresh_token_expires_at_unix: int
 
-    roles: Mapped[list["Role"]] = relationship(
-        "Role", secondary=role2permission, back_populates="permissions"
-    )
-
-
-class Region(Base):
-    __tablename__ = "regions"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    region: Mapped[str] = mapped_column(String, nullable=False)
-
-    cities: Mapped[list["City"]] = relationship("City", back_populates="region")
-
-
-class City(Base):
-    __tablename__ = "cities"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    region_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("regions.id"), nullable=False)
-
-    region: Mapped["Region"] = relationship("Region", back_populates="cities")
-    schools: Mapped[list["School"]] = relationship("School", back_populates="city")
-
-
-class School(Base):
-    __tablename__ = "schools"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    school: Mapped[str] = mapped_column(String, nullable=False)
-    city_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("cities.id"), nullable=False)
-
-    city: Mapped["City"] = relationship("City", back_populates="schools")
-    users: Mapped[list["User"]] = relationship("User", back_populates="school")
-
-
-class User(Base):
-    __tablename__ = "users"
-    __table_args__ = (
-        UniqueConstraint("email"),
-        UniqueConstraint("phone_number"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    first_name: Mapped[str] = mapped_column(String, nullable=False)
-    second_name: Mapped[str] = mapped_column(String, nullable=False)
-    middle_name: Mapped[str] = mapped_column(String, nullable=False)
-    age: Mapped[int] = mapped_column(Integer, nullable=False)
-    email: Mapped[str] = mapped_column(String, nullable=True)
-    phone_number: Mapped[str] = mapped_column(String, nullable=True)
-    password: Mapped[str] = mapped_column(String, nullable=False)
-    school_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("schools.id"), nullable=True)
-    role_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
-    school: Mapped["School"] = relationship("School", back_populates="users")
-    role: Mapped["Role"] = relationship("Role", back_populates="users")
+    issued_at: str = get_current_time().isoformat()
+    issued_at_unix: int = get_current_time().timestamp()

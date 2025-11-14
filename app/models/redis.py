@@ -6,11 +6,13 @@ from enum import Enum
 from pydantic import Field, validator
 from redis_om import HashModel
 
+
 class SessionStatus(str, Enum):
     CREATED = "CREATED"
     ACTIVE = "ACTIVE"
     FINISHED = "FINISHED"
     CLOSED = "CLOSED"
+
 
 class TestSession(HashModel):
     sid: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -42,6 +44,7 @@ class TestSession(HashModel):
 
     class Meta:
         model_key_prefix = "test_session"
+
 
 class QuestionRedis(HashModel):
     question_id: uuid = Field(default_factory=uuid.uuid4, index=True, primary_key=True)
