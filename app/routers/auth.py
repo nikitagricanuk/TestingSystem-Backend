@@ -1,18 +1,28 @@
+from enum import Enum
 from uuid import UUID
+
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi import Security
 from fastapi import Body
 import re
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from fastapi_pagination import Page, Params, create_page
+from fastapi_pagination.ext.sqlalchemy import paginate
 
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.databases import async_session_maker
+from app.core.permissions import Permissions
+from app.repositories.dao.exceptions import SchoolNotFoundError, UserAlreadyExistsError
 from app.repositories.dao.userdao import UserDAO, RoleEnum
-from app.schemas.users import User, UserCreate, LoginResponse, LoginRequest, UserCreateStudent
+from app.schemas.users import User, UserCreate, LoginResponse, LoginRequest, UserCreateStudent, UserFull, UserShort
 from app.utils.password import get_hashed_password, verify_password
 from app.services.auth.jwt_service import get_jwt_service, JWTService
 from app.services.auth.sessions import Session
-from typing import Optional
+from typing import Optional, cast
 
 from app.core.log import setup_logger
 
@@ -20,6 +30,7 @@ logger = setup_logger(__name__)
 
 # Helper to normalize role name for API responses (avoid leaking UUIDs)
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
+
 
 def _role_name_from_model(obj) -> Optional[str]:
     # Try relation object attributes first
@@ -35,14 +46,16 @@ def _role_name_from_model(obj) -> Optional[str]:
         return None
     return None
 
+
 router = APIRouter()
 
 # HTTP Bearer (Authorization: Bearer <access_token>)
 bearer_scheme = HTTPBearer(auto_error=True)
 
+
 async def get_current_user(
-    creds: HTTPAuthorizationCredentials = Security(bearer_scheme),
-    jwt: JWTService = Depends(get_jwt_service)
+        creds: HTTPAuthorizationCredentials = Security(bearer_scheme),
+        jwt: JWTService = Depends(get_jwt_service)
 ) -> User:
     """
     Extract and validate the *access* JWT from the Authorization header and return the user entity.
@@ -61,7 +74,7 @@ async def get_current_user(
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject type")
 
-    db_user = await UserDAO().get_user_with_role_and_permissions(uid)
+    db_user = await UserDAO().get_user_by_id(uid)
     if not db_user or not db_user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or not found")
 
@@ -102,43 +115,67 @@ async def get_current_user(
     created_at_unix = int(db_user.created_at.timestamp()) if getattr(db_user, "created_at", None) else None
     updated_at_unix = int(db_user.updated_at.timestamp()) if getattr(db_user, "updated_at", None) else None
 
-    return User(
+    return UserFull(
         id=db_user.id,
         email=db_user.email,
         is_active=db_user.is_active,
         role=role_name,
-        permissions=permissions_list,
-        created_at=db_user.created_at,
+        created_at=cast(Optional[datetime], getattr(db_user, "created_at", None)),
         created_at_unix=created_at_unix,
-        updated_at=db_user.updated_at,
+        updated_at=cast(Optional[datetime], getattr(db_user, "updated_at", None)),
         updated_at_unix=updated_at_unix,
+        permissions=permissions_list,
+        full_name=cast(Optional[str], getattr(db_user, "full_name", None)),
+        age=cast(Optional[int], getattr(db_user, "age", None)),
+        phone=cast(Optional[str], getattr(db_user, "phone_number", None)),
+        school_id=cast(Optional[str], getattr(db_user, "school_id", None)),
     )
 
-def require_roles(*allowed_roles: int):
-    """Factory for a role-checking dependency based on user.role_id."""
-    async def _dep(current_user: User = Depends(get_current_user)) -> User:
-        if allowed_roles and current_user.role_id not in allowed_roles:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
-        return current_user
-    return _dep
+
+def require_permissions(*perms: Enum):
+    async def _check(user: UserFull = Depends(get_current_user)) -> UserFull:
+        user_perms = set(user.permissions or [])
+        missing = [p.value for p in perms if p.value not in user_perms]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing required permissions: {', '.join(missing)}",
+            )
+        return user
+    return _check
+
+
+# def permissions_required(*perms: Permissions):
+#     def wrapper(route):
+#         dep = require_permissions(*perms)   # <- return the callable, don’t run it
+#         route.dependencies = getattr(route, "dependencies", []) + [Depends(dep)]
+#         return route
+#     return wrapper
+
 
 @router.post("/login", response_model=LoginResponse)
-async def login(credentials: LoginRequest, request: Request, jwt: JWTService = Depends(get_jwt_service)) -> LoginResponse:
+async def login(credentials: LoginRequest, request: Request,
+                jwt: JWTService = Depends(get_jwt_service)) -> LoginResponse:
     user = await UserDAO().get_user_by_email(credentials.email)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    if not verify_password(credentials.password, user.password):
+    try:
+        if not verify_password(credentials.password, user.password):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    except Exception:
+        # Hash invalid or cannot be verified → treat as invalid login
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    access_extra = {
-        "role": str(user.role_id) if user.role_id else None,
-    }
-    refresh_extra = {"uid": str(user.id),
-                     "role": str(user.role_id) if user.role_id else None}
+
+    # access_extra = {
+    #     "role": str(user.role_id) if user.role_id else None,
+    # }
+    # refresh_extra = {"uid": str(user.id),
+    #                  "role": str(user.role_id) if user.role_id else None}
 
     # 4) Issue tokens
-    pair = await jwt.create(subject=str(user.id), access_extra=access_extra, refresh_extra=refresh_extra, session_ip=request.client.host)
+    pair = await jwt.create(subject=str(user.id), session_ip=request.client.host)
 
     return LoginResponse(
         access_token=pair.access_token,
@@ -150,8 +187,10 @@ async def login(credentials: LoginRequest, request: Request, jwt: JWTService = D
         refresh_token_expires_at_unix=int(pair.refresh_token_expires_at.timestamp())
     )
 
+
 class LogoutRequest(BaseModel):
     refresh_token: str
+
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(payload: LogoutRequest, jwt: JWTService = Depends(get_jwt_service)):
@@ -175,36 +214,46 @@ async def logout(payload: LogoutRequest, jwt: JWTService = Depends(get_jwt_servi
 
 
 # Example protected endpoint
-@router.get("/me", response_model=User)
+# @permissions_required(Permissions.Users.READ)
+@router.get("/users/me", response_model=User)
 async def get_me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
+
 
 @router.post("/signup", response_model=User)
 async def create_student_account(user: UserCreateStudent) -> User:
     hashed_password = get_hashed_password(user.password)
-    created_user = await UserDAO().create(
-        first_name=user.first_name,
-        middle_name=user.middle_name,
-        second_name=user.second_name,
-        age=user.age,
-        email=user.email,
-        phone=user.phone,
-        password=hashed_password,
-        role=await UserDAO().get_role_id(RoleEnum.STUDENT),
-        school_id=user.school_id
-    )
+    try:
+        created_user = await UserDAO().create(
+            full_name=user.full_name,
+            age=user.age,
+            email=user.email,
+            phone=user.phone,
+            password=hashed_password,
+            role=await UserDAO().get_role_id(RoleEnum.STUDENT),
+            school_id=user.school_id
+        )
+    except SchoolNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except UserAlreadyExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to create user") from e
+
+
     return User(
         id=created_user.id,
         email=created_user.email,
         is_active=created_user.is_active,
         # Use helper to avoid leaking UUIDs as role
-        role=_role_name_from_model(created_user),
-        permissions=[],  # You might want to fetch and include permissions here
+        role=RoleEnum.STUDENT.value,
         created_at=created_user.created_at,
         created_at_unix=int(created_user.created_at.timestamp()),
         updated_at=created_user.updated_at,
         updated_at_unix=int(created_user.updated_at.timestamp()) if created_user.updated_at else None
     )
+
 
 @router.post("/users/create", response_model=User)
 async def create_user(user: dict = Body(...)) -> User:
@@ -226,9 +275,7 @@ async def create_user(user: dict = Body(...)) -> User:
                 role_id = None
 
     created_user = await UserDAO().create(
-        first_name=user.get("first_name"),
-        middle_name=user.get("middle_name"),
-        second_name=user.get("second_name"),
+        full_name=user.get("full_name"),
         age=user.get("age"),
         email=user.get("email"),
         phone=user.get("phone"),
@@ -238,12 +285,36 @@ async def create_user(user: dict = Body(...)) -> User:
     )
     return User(
         id=created_user.id,
+        nickname=created_user.nickname,
         email=created_user.email,
         is_active=created_user.is_active,
         role=_role_name_from_model(created_user),
-        permissions=[],
         created_at=created_user.created_at,
         created_at_unix=int(created_user.created_at.timestamp()),
         updated_at=created_user.updated_at,
         updated_at_unix=int(created_user.updated_at.timestamp()) if created_user.updated_at else None,
     )
+
+
+
+# @router.get("/users", response_model=Page[UserShort])
+# async def list_users(
+#     params: Params = Depends(),
+# ):
+#     query = UserDAO().users_query()   # returns a Select[User]
+#     async with async_session_maker() as session:
+#         page = await paginate(session, query)  # items are ORM Users
+#
+#     items = [
+#         UserShort(
+#             id=u.id,
+#             email=u.email,
+#             is_active=u.is_active,
+#             full_name=getattr(u, "full_name", None),
+#             role=getattr(getattr(u, "role", None), "name", None),   # <- Role -> str
+#         )
+#         for u in page.items
+#     ]
+#
+#     # rebuild a proper Page[...] with your DTOs
+#     return create_page(items, total=page.total, params=params)
