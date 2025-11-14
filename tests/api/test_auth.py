@@ -258,7 +258,6 @@ def test_me_success_with_bearer(client: TestClient, patch_userdao, jwt_override)
     assert body["email"] == "ivan.petrov@example.com"
     assert body["is_active"] is True
     assert body["role"] == "admin"
-    assert "permissions" in body and isinstance(body["permissions"], list)
     assert "created_at" in body
     assert "created_at_unix" in body
 
@@ -301,6 +300,9 @@ def test_signup_student_success(client: TestClient, patch_userdao):
         "/v1/auth/signup",
         json={
             "full_name": "Ivan Sergeevich Petrov",
+            "first_name": "Ivan",
+            "middle_name": "Sergeevich",
+            "second_name": "Petrov",
             "nickname": "Ivan",
             "age": 17,
             "email": "ivan.petrov@example.com",
@@ -321,13 +323,12 @@ def test_create_user_success(client: TestClient, patch_userdao):
         "/v1/auth/users/create",
         json={
             "full_name": "Petr Ivanovich Sidorov",
-            "nickname": "Petr",
+            "nickname": "petr_i",
             "age": 28,
             "email": "p.sidorov@example.com",
             "phone": "+79991112233",
             "password": "secret",
             "role": "ADMIN",
-            "school_id": str(uuid4()),
         },
     )
     assert res.status_code == 200

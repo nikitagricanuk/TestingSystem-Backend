@@ -126,6 +126,7 @@ async def get_current_user(
         updated_at_unix=updated_at_unix,
         permissions=permissions_list,
         full_name=cast(Optional[str], getattr(db_user, "full_name", None)),
+        nickname=cast(Optional[str], getattr(db_user, "nickname", None)),  # ← add this
         age=cast(Optional[int], getattr(db_user, "age", None)),
         phone=cast(Optional[str], getattr(db_user, "phone_number", None)),
         school_id=cast(Optional[str], getattr(db_user, "school_id", None)),
@@ -226,12 +227,13 @@ async def create_student_account(user: UserCreateStudent) -> User:
     try:
         created_user = await UserDAO().create(
             full_name=user.full_name,
+            nickname=user.nickname,  # <- pass through
             age=user.age,
             email=user.email,
             phone=user.phone,
             password=hashed_password,
             role=await UserDAO().get_role_id(RoleEnum.STUDENT),
-            school_id=user.school_id
+            school_id=user.school_id,
         )
     except SchoolNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
@@ -245,6 +247,7 @@ async def create_student_account(user: UserCreateStudent) -> User:
     return User(
         id=created_user.id,
         email=created_user.email,
+        nickname=created_user.nickname,
         is_active=created_user.is_active,
         # Use helper to avoid leaking UUIDs as role
         role=RoleEnum.STUDENT.value,
@@ -276,6 +279,7 @@ async def create_user(user: dict = Body(...)) -> User:
 
     created_user = await UserDAO().create(
         full_name=user.get("full_name"),
+        nickname=user.get("nickname"),
         age=user.get("age"),
         email=user.get("email"),
         phone=user.get("phone"),

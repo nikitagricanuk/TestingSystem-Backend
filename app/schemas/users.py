@@ -44,9 +44,8 @@ class UserCreate(BaseModel):
     additional_permissions: list[str] = []
 
 class UserCreateStudent(BaseModel):
-    first_name: str
-    middle_name: str | None = None
-    second_name: str
+    nickname: str
+    full_name: str
     age: int | None = None
     phone: str | None = None
     school_id: UUID | None = None
