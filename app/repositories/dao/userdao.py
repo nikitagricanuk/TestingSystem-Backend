@@ -1,16 +1,20 @@
 from uuid import UUID
 
+from asyncpg import ForeignKeyViolationError, UniqueViolationError
+
 from app.core.databases import connection
 from app.core.log import setup_logger
-from app.models.database import User, Role, Permission, role2permission
+from app.models.database import User, Role, Permission, role2permission, School
 from sqlalchemy import select, exists, func
 from sqlalchemy.orm import selectinload
 
-from typing import Optional, Mapping, Any
+from typing import Optional, Mapping, Any, Coroutine, Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from enum import Enum
+
+from app.repositories.dao.exceptions import SchoolNotFoundError, UserAlreadyExistsError
 
 logger = setup_logger(__name__)
 
@@ -21,7 +25,7 @@ class RoleEnum(Enum):
 
 # Fields that can be updated via generic update methods (profile-level only)
 _ALLOWED_UPDATE_FIELDS = {
-    "first_name", "middle_name", "second_name", "age",
+    "full_name", "middle_name", "last_name", "age",
     "phone_number", "school_id"
 }
 
@@ -42,21 +46,36 @@ def _filter_update_payload(payload: Mapping[str, Any]) -> dict:
 
 class UserDAO:
     @connection
-    async def create(self, first_name: str, middle_name: str, second_name: str,
-                    age: int, email: str, phone: str, password: str,
-                     role: UUID, school_id: str | None = None, session = None) -> User:
+    async def create(self, full_name: str, nickname: str, age: int, email: str, phone: str,
+                     password: str, role: UUID, school_id: str | None = None,
+                     session = None) -> User:
         email = _normalize_email(email)
-        user = User(
-            first_name=first_name,
-            middle_name=middle_name,
-            second_name=second_name,
-            age=age,
-            email=email,
-            phone_number=phone,
-            password=password,
-            role_id=role,  # Use the same session
-            school_id=school_id
-        )
+        if not await session.get(School, school_id):
+            raise SchoolNotFoundError(f"School with id {school_id} not found")
+        try:
+            user = User(
+                full_name=full_name,
+                nickname=nickname,
+                age=age,
+                email=email,
+                phone_number=phone,
+                password=password,
+                role_id=role,  # Use the same session
+                school_id=school_id
+            )
+        except UniqueViolationError as e:
+            logger.error("Failed to create user email=%s due to unique violation: %s", email, e)
+            raise UserAlreadyExistsError(f"User with email {email} already exists") from e
+        except ForeignKeyViolationError as e:
+            logger.error("Failed to create user email=%s due to foreign key violation: %s", email, e)
+            raise
+        except IntegrityError as e:
+            logger.error("Failed to create user email=%s due to integrity error: %s", email, e)
+            raise
+        except Exception as e:
+            logger.error("Failed to create user email=%s due to unexpected error: %s", email, e)
+            raise
+
         if password and not password.startswith("$"):
             logger.warning("Creating user with a password that does not look hashed.")
         session.add(user)
@@ -90,14 +109,14 @@ class UserDAO:
         )
         return result.scalar_one_or_none()
 
-    @connection
-    async def get_user_with_role_and_permissions(self, user_id: UUID | str, session: Optional[AsyncSession] = None) -> Optional[User]:
-        result = await session.execute(
-            select(User)
-            .options(selectinload(User.role).selectinload(Role.permissions))
-            .where(User.id == user_id)
-        )
-        return result.scalar_one_or_none()
+    # @connection
+    # async def get_user_with_role_and_permissions(self, user_id: UUID | str, session: Optional[AsyncSession] = None) -> Optional[User]:
+    #     result = await session.execute(
+    #         select(User)
+    #         .options(selectinload(User.role).selectinload(Role.permissions))
+    #         .where(User.id == user_id)
+    #     )
+    #     return result.scalar_one_or_none()
 
     @connection
     async def get_user_by_email(self, email: str, session: Optional[AsyncSession] = None) -> Optional[User]:
@@ -220,3 +239,16 @@ class UserDAO:
         await session.commit()
         logger.info("Password updated for user id=%s", user_id)
         return True
+
+    @connection
+    async def list_users(self, session: Optional[AsyncSession] = None) -> Sequence[User]:
+        result = await session.execute(select(User))
+        return result.scalars().all()
+
+    @classmethod
+    def users_query(cls):
+        return (
+            select(User)
+            .options(selectinload(User.role))
+            .order_by(User.created_at.desc(), User.id.desc())  # stable ordering
+        )
