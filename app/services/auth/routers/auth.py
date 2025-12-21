@@ -8,8 +8,6 @@ from fastapi import Security
 from fastapi import Body
 import re
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi_pagination import Page, Params, create_page
-from fastapi_pagination.ext.sqlalchemy import paginate
 
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
