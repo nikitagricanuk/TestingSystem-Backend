@@ -1,43 +1,39 @@
 import json
 import uuid
 from typing import List, Optional, Self
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
-from redis.asyncio import Redis  # async redis client
 from aredis_om import NotFoundError
 
-from app.models.redis import Session, QuestionRedis, SessionStatus
+from .models.redis import Session, QuestionRedis, SessionStatus
+from .question_bank.question_bank import QuestionBank, Question
+from .schemas.sessions import Session as SessionSchema
+
 
 
 class SessionService:
     """
-    Real OOP-style session service:
-    - Each instance works with ONE concrete session (self.session).
-    - Provides methods to answer questions, finish the session, etc.
+    Service class to manage testing sessions. Creates and manages sessions,
+    computes final score. Delegates question-related operations to QuestionManager.
     """
 
-    def __init__(self, redis_client: Redis, session: Session) -> None:
-        self.redis_client = redis_client
-
-        # Configure models to use this Redis connection
-        Session.Meta.database = redis_client
-        QuestionRedis.Meta.database = redis_client
-
+    def __init__(self, session: Session, qb: QuestionBank) -> None:
         self.session: Session = session
+        self.qb: QuestionBank = qb
 
     # --------- Factory methods (OOP constructor helpers) ---------
 
     @classmethod
     async def create(
-        cls,
-        redis_client: Redis,
-        *,
-        user_id: uuid.UUID,
-        test_id: uuid.UUID,
-        question_ids: List[str],
-        indefinite_questions: bool,
-        ip_address: str,
+            cls,
+            *,
+            user_id: UUID,
+            test_id: UUID,
+            question_ids: list[UUID],
+            indefinite_questions: bool,
+            ip_address: str,
+            qb: QuestionBank
     ) -> Self:
         """
         Create a new testing session and wrap it in SessionService.
@@ -45,72 +41,168 @@ class SessionService:
         if not question_ids:
             raise ValueError("Cannot create a session without questions.")
 
-        Session.Meta.database = redis_client
-        QuestionRedis.Meta.database = redis_client
-
         session = Session(
             sid=str(uuid.uuid4()),
             test_id=test_id,
             user_id=user_id,
-            question_ids=json.dumps(question_ids),
+            question_ids=json.dumps([str(qid) for qid in question_ids]),
             questions_remaining=len(question_ids),
-            indefinite_questions=int(indefinite_questions),
+            indefinite_questions=indefinite_questions,
             ip_address=ip_address,
             answers=json.dumps({}),
             questions_answered=0,
             current_question_index=0,
-            status=SessionStatus.ACTIVE.value,
-            time_start=datetime.now(),
-            last_activity=datetime.now(),
+            status=SessionStatus.ACTIVE,
+            time_start=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
         )
         await session.save()
-        return cls(redis_client, session)
+        return cls(session, qb)
 
     @classmethod
     async def load(
-        cls,
-        redis_client: Redis,
-        session_id: str,
+            cls,
+            session_id: str,
+            qb: QuestionBank
     ) -> Optional[Self]:
         """
         Load an existing session and wrap it in SessionService.
         """
-        Session.Meta.database = redis_client
-        QuestionRedis.Meta.database = redis_client
-
         try:
             session = await Session.get(session_id)
         except NotFoundError:
             return None
 
-        return cls(redis_client, session)
+        return cls(session, qb)
+
+    @classmethod
+    async def user_sessions(cls, user_id: UUID) -> List[Session]:
+        """
+        Get all sessions for a given user.
+        """
+        sessions = await Session.find(Session.user_id == str(user_id)).all()
+        return sessions
 
     # --------- Object methods (no session_id argument) ---------
 
-    async def answer_question(
-        self,
-        question_index: int,
-        answer: str,
+    async def get_current_question(self) -> Question:
+        questions = await self._get_question_ids()
+        return await self.qb.get_question(questions[self.session.current_question_index])
+
+    async def get_question_by_index(self, question_index: int) -> Question:
+        questions = await self._get_question_ids()
+        return await self.qb.get_question(questions[question_index])
+
+    async def answer_current_question(
+            self,
+            question_index: int,
+            answer: str,
     ) -> Session:
         """
         Update this session with an answer to a given question index.
         """
         session = self.session
 
-        if session.status != SessionStatus.ACTIVE.value:
+        if session.status != SessionStatus.ACTIVE:
             raise ValueError("Cannot answer questions in a non-active session.")
 
         answers_dict = json.loads(session.answers or "{}")
+
+        # If this question is being answered for the first time, update counters.
+        is_first_answer = str(question_index) not in answers_dict
+
         answers_dict[str(question_index)] = answer
 
-        session.questions_answered += 1
-        session.questions_remaining -= 1
-        session.current_question_index += 1
-        session.last_activity = datetime.now()
+        if is_first_answer:
+            session.questions_answered += 1
+            if session.questions_remaining > 0:
+                session.questions_remaining -= 1
+
+        # Move pointer to the next question after this one
+        session.current_question_index = question_index + 1
+        session.last_activity = datetime.now(timezone.utc)
         session.answers = json.dumps(answers_dict)
 
         await session.save()
         return session
+
+    async def next_question(self) -> Question:
+        self.session.current_question_index += 1
+        self.session.last_activity = datetime.now(timezone.utc)
+        return await self.get_current_question()
+
+    async def prev_question(self) -> Question:
+        self.session.current_question_index -= 1
+        self.session.last_activity = datetime.now(timezone.utc)
+        return await self.get_current_question()
+
+    async def get(self) -> SessionSchema:
+        """
+        Get the current session info.
+        """
+        return SessionSchema(
+            sid=self.session.sid,
+            test_id=self.session.test_id,
+            user_id=self.session.user_id,
+            time_start=self.session.time_start,
+            time_start_unix=int(self.session.time_start.replace(tzinfo=timezone.utc).timestamp()),
+            time_finish=self.session.time_finish,
+            time_finish_unix=int(self.session.time_finish.replace(
+                tzinfo=timezone.utc).timestamp()) if self.session.time_finish else None,
+            duration_seconds=int(datetime.now(timezone.utc).timestamp() - self.session.time_start.replace(
+                tzinfo=timezone.utc).timestamp()) if self.session.status == SessionStatus.ACTIVE else None,
+            indefinite_questions=self.session.indefinite_questions,
+            total_questions=self.session.questions_answered + self.session.questions_remaining,
+            questions_answered=self.session.questions_answered,
+            questions_remaining=self.session.questions_remaining,
+            current_question_index=self.session.current_question_index,
+            status=self.session.status.value,
+            ip_address=self.session.ip_address,
+            last_activity_unix=int(self.session.last_activity.replace(tzinfo=timezone.utc).timestamp()),
+        )
+
+    # --------- Question helpers ---------
+
+    async def _get_question_ids(self) -> list[UUID]:
+        """
+        Return the list of question IDs for this session.
+        """
+        question_ids: list[str] = json.loads(self.session.question_ids or "[]")
+        return [UUID(qid) for qid in question_ids]
+
+    # async def get_question_by_index(
+    #     self,
+    #     index: int,
+    # ) -> Optional['SessionQuestion']:
+    #     """
+    #     Return a SessionQuestion wrapper for the given index, or None if out of range.
+    #     """
+    #     question_ids = await self._get_question_ids()
+    #
+    #     if index < 0 or index >= len(question_ids):
+    #         return None
+    #
+    #     qid = question_ids[index]
+    #     question_obj = await QuestionRedis.get(qid)
+    #     # Assuming choices is stored as JSON string
+    #     question_obj.choices = json.loads(question_obj.choices)
+    #     return SessionQuestion(service=self, index=index, question=question_obj)
+
+    # async def get_question(self) -> Optional['SessionQuestion']:
+    #     """
+    #     Get object to work with questions in this session.
+    #     """
+    #     question_ids = await self._get_question_ids()
+    #     index = self.session.current_question_index
+    #
+    #     if index < 0 or index >= len(question_ids):
+    #         return None
+    #
+    #     qid = question_ids[index]
+    #     question_obj = await QuestionRedis.get(qid)
+    #     # Assuming choices is stored as JSON string
+    #     question_obj.choices = json.loads(question_obj.choices)
+    #     return SessionQuestion(service=self, index=index, question=question_obj)
 
     async def finish(self) -> Session:
         """
@@ -123,12 +215,12 @@ class SessionService:
             return session
 
         session.status = SessionStatus.FINISHED
-        session.time_finish = datetime.now()
+        session.time_finish = datetime.now(timezone.utc)
         session.duration = int(
             (session.time_finish - session.time_start).total_seconds()
         )
 
-        question_ids = json.loads(session.question_ids)
+        question_ids = await self._get_question_ids()
         # Load questions from Redis
         questions = [await QuestionRedis.get(qid) for qid in question_ids]
 
@@ -137,28 +229,39 @@ class SessionService:
         await session.save()
         return session
 
-    async def get_current_question(self) -> Optional[QuestionRedis]:
+    async def close(self) -> Session:
         """
-        Get the current question for this session.
+        Close this session without finishing it.
         """
         session = self.session
-        question_ids = json.loads(session.question_ids)
 
-        if session.current_question_index >= len(question_ids):
-            return None
+        if session.status == SessionStatus.CLOSED:
+            return session
 
-        current_qid = question_ids[session.current_question_index]
-
-        question_obj = await QuestionRedis.get(current_qid)
-        # Assuming choices is stored as JSON string
-        question_obj.choices = json.loads(question_obj.choices)
-        return question_obj
+        session.status = SessionStatus.CLOSED
+        session.time_finish = datetime.utcnow()
+        session.duration = int(
+            (session.time_finish - session.time_start).total_seconds()
+        )
+        await session.save()
+        return session
 
     # --------- Helpers / properties ---------
 
     @property
     def id(self) -> UUID:
         return self.session.sid
+
+    # @property
+    # def question(self) -> QuestionManager:
+    #     """
+    #     Accessor for question-related operations.
+    #
+    #     Usage:
+    #         q = await service.question.current()
+    #         await q.answer("A")
+    #     """
+    #     return QuestionManager(self.session)
 
     @staticmethod
     def _score_session(session: Session, questions: List[QuestionRedis]) -> float:
