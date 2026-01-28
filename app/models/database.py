@@ -94,3 +94,7 @@ class User(Base):
 
     school: Mapped["School"] = relationship("School", back_populates="users")
     role: Mapped["Role"] = relationship("Role", back_populates="users")
+
+    questions: Mapped[list["Question"]] = relationship("Question", back_populates="teacher")
+
+from app.repositories.question_bank.models import Question

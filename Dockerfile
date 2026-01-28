@@ -1,43 +1,57 @@
 # syntax=docker/dockerfile:1
 ARG PYTHON_VERSION=3.11-slim
-FROM mirror.gcr.io/python:${PYTHON_VERSION} AS base
+FROM python:${PYTHON_VERSION} AS base
 
+# ----------------------
+# Настройка окружения
+# ----------------------
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    POETRY_HOME=/opt/poetry \
+    PATH="$POETRY_HOME/bin:$PATH"
 
 WORKDIR /app
 
-# System deps (build tools optional; keep if you compile wheels)
+# ----------------------
+# Установка системных зависимостей
+# ----------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl build-essential git \
+        curl build-essential git libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ---- Install Poetry (no venv; we’ll install into system env for simplicity)
-ENV POETRY_HOME=/opt/poetry
+# ----------------------
+# Установка Poetry
+# ----------------------
 ENV POETRY_VERSION=2.1.4
 RUN curl -sSL https://install.python-poetry.org | python - --version ${POETRY_VERSION} \
- && ln -s ${POETRY_HOME}/bin/poetry /usr/local/bin/poetry
+    && ln -s ${POETRY_HOME}/bin/poetry /usr/local/bin/poetry
 
-# ---- Copy only dependency files first to leverage Docker cache
+# ----------------------
+# Копирование зависимостей для кеша Docker
+# ----------------------
 COPY pyproject.toml poetry.lock* ./
 
-# IMPORTANT: prevent Poetry from trying to install the root package during deps step
+# Не устанавливаем корневой пакет, только зависимости
 RUN poetry config virtualenvs.create false \
- && poetry install --no-interaction --no-ansi --no-root
+    && poetry install --no-interaction --no-ansi --no-root
 
-# ---- Now copy the rest of your project
+# ----------------------
+# Копирование исходников проекта
+# ----------------------
 COPY . .
 
-# Create non-root user (after files are present so chown is fast if needed)
+# ----------------------
+# Создание безопасного пользователя
+# ----------------------
 RUN adduser --disabled-password --gecos "" --home "/nonexistent" --shell "/sbin/nologin" --no-create-home appuser
 USER appuser
 
+# ----------------------
+# Экспонируемый порт
+# ----------------------
 EXPOSE 8000
 
-# Choose one of the commands below:
-
-# A) Uvicorn directly (simplest). Replace 'your_module.app:app' with your ASGI import path.
+# ----------------------
+# Команда запуска FastAPI через uvicorn
+# ----------------------
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# B) Or Gunicorn with Uvicorn workers:
-# CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "your_module.app:app", "--bind", "0.0.0.0:8000"]
