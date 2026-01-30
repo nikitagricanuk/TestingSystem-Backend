@@ -1,5 +1,8 @@
 ##в QuestionType какие типы??
-from app.models.database import User
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models.database import User
 import sys
 import os
 from sqlalchemy.orm import remote
@@ -19,8 +22,14 @@ from sqlalchemy import (
     UniqueConstraint, Table, Column, Index
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 import uuid
+
+if os.environ.get("TESTING", False):
+    JSON_TYPE = JSON       # для SQLite тестов
+else:
+    JSON_TYPE = JSONB
 
 from app.models import Base
 class Category(Base):
@@ -73,7 +82,7 @@ class Question(Base):
     )
 
     answer: Mapped[dict] = mapped_column(
-        JSONB,
+        JSON_TYPE,
         nullable=False
     )
 

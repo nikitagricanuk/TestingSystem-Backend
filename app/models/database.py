@@ -1,3 +1,8 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.repositories.question_bank.models import Question
+
 from sqlalchemy import (
     String, Integer, Boolean, ForeignKey, Text,
     UniqueConstraint, Table, Column, Index
@@ -97,4 +102,3 @@ class User(Base):
 
     questions: Mapped[list["Question"]] = relationship("Question", back_populates="teacher")
 
-from app.repositories.question_bank.models import Question
