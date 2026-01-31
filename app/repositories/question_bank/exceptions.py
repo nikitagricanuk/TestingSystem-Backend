@@ -18,14 +18,22 @@ class QuestionDeleteError(QuestionDAOError):
     """Error deleting a question"""
     pass
 
-class DAOException(Exception):
-    """Общая ошибка DAO."""
+class CategoryDAOError(Exception):
+    """The basic exception for CategoryDAO"""
     pass
 
-class CategoryNotFound(DAOException):
-    """Категория не найдена."""
+class CategoryCreateError(CategoryDAOError):
+    """Error when creating a category"""
     pass
 
-class QuestionNotFound(DAOException):
-    """Вопрос не найден."""
+class CategoryUpdateError(CategoryDAOError):
+    """Error updating the category"""
+    pass
+
+class CategoryDeleteError(CategoryDAOError):
+    """Error deleting a category"""
+    pass
+
+class CategoryNotFound(CategoryDAOError):
+    """The issue with the specified ID was not found"""
     pass

@@ -1,21 +1,21 @@
-# app/repositories/question_bank/question_dao.py
-
 from typing import Optional, Mapping, Any, Sequence
-from uuid import UUID, uuid4
+from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.question_bank.models import Question, Category
-from app.core.connection import async_session
 from app.repositories.question_bank.exceptions import (
-    DAOException,
     QuestionDAOError,
     QuestionNotFoundError,
     QuestionCreateError,
     QuestionUpdateError,
     QuestionDeleteError,
     CategoryNotFound,
+    CategoryCreateError,
+    CategoryUpdateError,
+    CategoryDeleteError,
+    CategoryDAOError
 )
 from app.core.log import setup_logger
 
@@ -24,132 +24,169 @@ logger = setup_logger(__name__)
 
 class QuestionDAO:
     @staticmethod
-    async def add_question(data: Mapping[str, Any], session: Optional[AsyncSession] = None) -> Question:
-        async with (session or async_session()) as s:
-            try:
-                async with s.begin():
-                    question = Question(**data)
-                    s.add(question)
-                await s.refresh(question)
-                logger.info(f"Question {question.id} added")
-                return question
-            except IntegrityError as e:
-                logger.error(f"Failed to create question: {e}")
-                raise QuestionCreateError("Failed to create question") from e
-            except SQLAlchemyError as e:
-                logger.error(f"Database error: {e}")
-                raise QuestionDAOError("Database error") from e
+    async def add_question(data: dict, session: AsyncSession) -> Question:
+        if not session:
+            raise QuestionDAOError("Session is required")
+        if not data.get("text"):
+            raise QuestionCreateError("Question text cannot be None")
+        category_id = data.get("category_id")
+        if not category_id:
+            raise QuestionCreateError("Category ID is required")
+        try:
+            await CategoryDAO.get(category_id, session=session)
+        except Exception:
+            raise QuestionCreateError(f"Category {category_id} not found")
+        question = Question(**data)
+        session.add(question)
+        try:
+            await session.flush()
+            logger.info(f"Question {question.id} created")
+        except IntegrityError as e:
+            await session.rollback()
+            logger.error(f"Failed to add question: {e}")
+            raise QuestionCreateError("Failed to add question due to DB constraint") from e
+        return question
 
     @staticmethod
-    async def get(question_id: UUID, session: Optional[AsyncSession] = None) -> Question:
-        async with (session or async_session()) as s:
-            result = await s.execute(select(Question).where(Question.id == question_id))
-            question = result.scalar_one_or_none()
-            if not question:
-                raise QuestionNotFoundError(f"Question {question_id} not found")
+    async def get(question_id: UUID, session: AsyncSession) -> Question:
+        if not session:
+            raise QuestionDAOError("Session is required")
+        result = await session.execute(select(Question).where(Question.id == question_id))
+        question = result.scalar_one_or_none()
+        if not question:
+            raise QuestionNotFoundError(f"Question {question_id} not found")
+        return question
+
+    @staticmethod
+    async def list(offset: int = 0, limit: int = 100, session: AsyncSession = None) -> Sequence[Question]:
+        if not session:
+            raise QuestionDAOError("Session is required")
+        result = await session.execute(select(Question).offset(offset).limit(limit))
+        return result.scalars().all()
+
+    @staticmethod
+    async def update(question_id: UUID, data: Mapping[str, Any], session: AsyncSession) -> Question:
+        if not session:
+            raise QuestionDAOError("Session is required")
+        if not data:
+            raise QuestionUpdateError("Nothing to update: data is empty")
+
+        try:
+            question = await QuestionDAO.get(question_id, session)
+            for key, value in data.items():
+                setattr(question, key, value)
+            await session.flush()
+            logger.info(f"Question {question.id} updated")
             return question
+        except IntegrityError as e:
+            await session.rollback()
+            logger.error(f"Failed to update question: {e}")
+            raise QuestionUpdateError(f"Failed to update question {question_id}") from e
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Database error: {e}")
+            raise QuestionDAOError("Database error") from e
 
     @staticmethod
-    async def list(offset: int = 0, limit: int = 100, session: Optional[AsyncSession] = None) -> Sequence[Question]:
-        async with (session or async_session()) as s:
-            result = await s.execute(select(Question).offset(offset).limit(limit))
-            return result.scalars().all()
-
-    @staticmethod
-    async def update(question_id: UUID, data: Mapping[str, Any], session: Optional[AsyncSession] = None) -> Question:
-        async with (session or async_session()) as s:
-            try:
-                question = await QuestionDAO.get(question_id, session=s)
-                for key, value in data.items():
-                    setattr(question, key, value)
-                async with s.begin():
-                    s.add(question)
-                await s.refresh(question)
-                logger.info(f"Question {question.id} updated")
-                return question
-            except IntegrityError as e:
-                logger.error(f"Failed to update question: {e}")
-                raise QuestionUpdateError(f"Failed to update question {question_id}") from e
-            except SQLAlchemyError as e:
-                logger.error(f"Database error: {e}")
-                raise QuestionDAOError("Database error") from e
-
-    @staticmethod
-    async def delete(question_id: UUID, session: Optional[AsyncSession] = None) -> None:
-        async with (session or async_session()) as s:
-            try:
-                question = await QuestionDAO.get(question_id, session=s)
-                async with s.begin():
-                    await s.delete(question)
-                logger.info(f"Question {question.id} deleted")
-            except SQLAlchemyError as e:
-                logger.error(f"Failed to delete question: {e}")
-                raise QuestionDeleteError(f"Failed to delete question {question_id}") from e
+    async def delete(question_id: UUID, session: AsyncSession) -> None:
+        if not session:
+            raise QuestionDAOError("Session is required")
+        try:
+            question = await QuestionDAO.get(question_id, session)
+            await session.delete(question)
+            await session.flush()
+            logger.info(f"Question {question.id} deleted")
+        except QuestionNotFoundError:
+            raise QuestionDeleteError(f"Question {question_id} already deleted")
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Failed to delete question {question_id}: {e}")
+            raise QuestionDeleteError(f"Failed to delete question {question_id}") from e
 
 
 class CategoryDAO:
     @staticmethod
-    async def create(name: str, parent_id: Optional[UUID] = None, session: Optional[AsyncSession] = None) -> Category:
-        async with (session or async_session()) as s:
-            try:
-                async with s.begin():
-                    category = Category(id=uuid4(), category=name, parent_id=parent_id)
-                    s.add(category)
-                await s.refresh(category)
-                logger.info(f"Category {category.id} created")
-                return category
-            except IntegrityError as e:
-                logger.error(f"Failed to create category: {e}")
-                raise DAOException(f"Failed to create category '{name}'") from e
-            except SQLAlchemyError as e:
-                logger.error(f"Database error: {e}")
-                raise DAOException("Database error") from e
+    async def create(name: str, session: AsyncSession) -> Category:
+        if not session:
+            raise CategoryDAOError("Session is required")
+        if not name:
+            raise CategoryCreateError("Category name cannot be None")
+
+        category = Category(category=name)
+        session.add(category)
+        try:
+            await session.flush()
+            logger.info(f"Category {category.id} created")
+        except IntegrityError as e:
+            await session.rollback()
+            logger.error(f"Failed to create category: {e}")
+            raise CategoryCreateError(f"Category '{name}' already exists") from e
+
+        return category
 
     @staticmethod
-    async def get_by_id(category_id: UUID, session: Optional[AsyncSession] = None) -> Category:
-        async with (session or async_session()) as s:
-            result = await s.execute(select(Category).where(Category.id == category_id))
-            category = result.scalar_one_or_none()
-            if not category:
-                raise CategoryNotFound(f"Category {category_id} not found")
-            return category
+    async def get(category_id: UUID, session: AsyncSession) -> Category:
+        if not session:
+            raise CategoryDAOError("Session is required")
+        result = await session.execute(select(Category).where(Category.id == category_id))
+        category = result.scalar_one_or_none()
+        if not category:
+            raise CategoryNotFound(f"Category {category_id} not found")
+        return category
 
     @staticmethod
-    async def list(offset: int = 0, limit: int = 100, session: Optional[AsyncSession] = None) -> Sequence[Category]:
-        async with (session or async_session()) as s:
-            result = await s.execute(select(Category).offset(offset).limit(limit))
-            return result.scalars().all()
+    async def list(offset: int = 0, limit: int = 100, session: AsyncSession = None) -> Sequence[Category]:
+        if not session:
+            raise CategoryDAOError("Session is required")
+        result = await session.execute(select(Category).offset(offset).limit(limit))
+        return result.scalars().all()
 
     @staticmethod
     async def update(category_id: UUID, new_name: Optional[str] = None, parent_id: Optional[UUID] = None,
-                     session: Optional[AsyncSession] = None) -> Category:
-        async with (session or async_session()) as s:
-            try:
-                category = await CategoryDAO.get_by_id(category_id, session=s)
-                if new_name:
-                    category.category = new_name
-                if parent_id is not None:
-                    category.parent_id = parent_id
-                async with s.begin():
-                    s.add(category)
-                await s.refresh(category)
-                logger.info(f"Category {category.id} updated")
-                return category
-            except IntegrityError as e:
-                logger.error(f"Failed to update category: {e}")
-                raise DAOException(f"Failed to update category {category_id}") from e
-            except SQLAlchemyError as e:
-                logger.error(f"Database error: {e}")
-                raise DAOException("Database error") from e
+                     session: AsyncSession = None) -> Category:
+        if not session:
+            raise CategoryDAOError("Session is required")
+        if new_name is None and parent_id is None:
+            raise CategoryUpdateError("Nothing to update: new_name and parent_id are both None")
+
+        try:
+            category = await CategoryDAO.get(category_id, session)
+            if new_name:
+                existing = await session.execute(
+                    select(Category).where(
+                        Category.category == new_name,
+                        Category.id != category_id
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    raise CategoryUpdateError(f"Category '{new_name}' already exists")
+                category.category = new_name
+            if parent_id is not None:
+                category.parent_id = parent_id
+            await session.flush()
+            logger.info(f"Category {category.id} updated")
+            return category
+        except IntegrityError as e:
+            await session.rollback()
+            logger.error(f"Failed to update category {category_id}: {e}")
+            raise CategoryUpdateError(f"Failed to update category {category_id}") from e
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Database error: {e}")
+            raise CategoryDAOError("Database error") from e
 
     @staticmethod
-    async def delete(category_id: UUID, session: Optional[AsyncSession] = None) -> None:
-        async with (session or async_session()) as s:
-            try:
-                category = await CategoryDAO.get_by_id(category_id, session=s)
-                async with s.begin():
-                    await s.delete(category)
-                logger.info(f"Category {category.id} deleted")
-            except SQLAlchemyError as e:
-                logger.error(f"Failed to delete category: {e}")
-                raise DAOException(f"Failed to delete category {category_id}") from e
+    async def delete(category_id: UUID, session: AsyncSession) -> None:
+        if not session:
+            raise CategoryDAOError("Session is required")
+        try:
+            category = await CategoryDAO.get(category_id, session)
+            await session.delete(category)
+            await session.flush()
+            logger.info(f"Category {category.id} deleted")
+        except CategoryNotFound:
+            raise CategoryDeleteError(f"Category {category_id} already deleted")
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Failed to delete category {category_id}: {e}")
+            raise CategoryDeleteError(f"Failed to delete category {category_id}") from e

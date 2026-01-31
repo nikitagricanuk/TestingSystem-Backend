@@ -1,33 +1,25 @@
-##в QuestionType какие типы??
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.models.database import User
-import sys
 import os
-from sqlalchemy.orm import remote
 import enum
-
+from sqlalchemy import Enum
 class QuestionType(enum.Enum):
     single = "single"
     multiple = "multiple"
     text = "text"
 
-from sqlalchemy import Enum
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-sys.path.insert(0, project_root)
-
 from sqlalchemy import (
     String, Integer, Boolean, ForeignKey, Text,
-    UniqueConstraint, Table, Column, Index
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy import JSON
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 import uuid
 
 if os.environ.get("TESTING", False):
-    JSON_TYPE = JSON       # для SQLite тестов
+    JSON_TYPE = JSON       #для тестов
 else:
     JSON_TYPE = JSONB
 
@@ -51,7 +43,8 @@ class Category(Base):
 
     questions: Mapped[list["Question"]] = relationship(
         "Question",
-        back_populates="category"
+        back_populates="category",
+        cascade="all, delete-orphan"
     )
 
 class Question(Base):
@@ -86,7 +79,7 @@ class Question(Base):
         nullable=False
     )
 
-    market_out_of: Mapped[int] = mapped_column(
+    mark_out_of: Mapped[int] = mapped_column(
         Integer,
         nullable=False
     )
