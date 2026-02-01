@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.core.databases import connection
 from app.repositories.question_bank.models import Question, Category
 from app.repositories.question_bank.exceptions import (
     QuestionDAOError,
@@ -24,6 +24,7 @@ logger = setup_logger(__name__)
 
 class QuestionDAO:
     @staticmethod
+    @connection
     async def add_question(data: dict, session: AsyncSession) -> Question:
         if not session:
             raise QuestionDAOError("Session is required")
@@ -48,6 +49,7 @@ class QuestionDAO:
         return question
 
     @staticmethod
+    @connection
     async def get(question_id: UUID, session: AsyncSession) -> Question:
         if not session:
             raise QuestionDAOError("Session is required")
@@ -58,6 +60,7 @@ class QuestionDAO:
         return question
 
     @staticmethod
+    @connection
     async def list(offset: int = 0, limit: int = 100, session: AsyncSession = None) -> Sequence[Question]:
         if not session:
             raise QuestionDAOError("Session is required")
@@ -65,6 +68,7 @@ class QuestionDAO:
         return result.scalars().all()
 
     @staticmethod
+    @connection
     async def update(question_id: UUID, data: Mapping[str, Any], session: AsyncSession) -> Question:
         if not session:
             raise QuestionDAOError("Session is required")
@@ -72,7 +76,7 @@ class QuestionDAO:
             raise QuestionUpdateError("Nothing to update: data is empty")
 
         try:
-            question = await QuestionDAO.get(question_id, session)
+            question = await QuestionDAO.get(question_id, session=session)
             for key, value in data.items():
                 setattr(question, key, value)
             await session.flush()
@@ -88,11 +92,12 @@ class QuestionDAO:
             raise QuestionDAOError("Database error") from e
 
     @staticmethod
+    @connection
     async def delete(question_id: UUID, session: AsyncSession) -> None:
         if not session:
             raise QuestionDAOError("Session is required")
         try:
-            question = await QuestionDAO.get(question_id, session)
+            question = await QuestionDAO.get(question_id, session=session)
             await session.delete(question)
             await session.flush()
             logger.info(f"Question {question.id} deleted")
@@ -106,6 +111,7 @@ class QuestionDAO:
 
 class CategoryDAO:
     @staticmethod
+    @connection
     async def create(name: str, session: AsyncSession) -> Category:
         if not session:
             raise CategoryDAOError("Session is required")
@@ -125,6 +131,7 @@ class CategoryDAO:
         return category
 
     @staticmethod
+    @connection
     async def get(category_id: UUID, session: AsyncSession) -> Category:
         if not session:
             raise CategoryDAOError("Session is required")
@@ -135,6 +142,7 @@ class CategoryDAO:
         return category
 
     @staticmethod
+    @connection
     async def list(offset: int = 0, limit: int = 100, session: AsyncSession = None) -> Sequence[Category]:
         if not session:
             raise CategoryDAOError("Session is required")
@@ -142,6 +150,7 @@ class CategoryDAO:
         return result.scalars().all()
 
     @staticmethod
+    @connection
     async def update(category_id: UUID, new_name: Optional[str] = None, parent_id: Optional[UUID] = None,
                      session: AsyncSession = None) -> Category:
         if not session:
@@ -150,7 +159,7 @@ class CategoryDAO:
             raise CategoryUpdateError("Nothing to update: new_name and parent_id are both None")
 
         try:
-            category = await CategoryDAO.get(category_id, session)
+            category = await CategoryDAO.get(category_id, session=session)
             if new_name:
                 existing = await session.execute(
                     select(Category).where(
@@ -176,11 +185,12 @@ class CategoryDAO:
             raise CategoryDAOError("Database error") from e
 
     @staticmethod
+    @connection
     async def delete(category_id: UUID, session: AsyncSession) -> None:
         if not session:
             raise CategoryDAOError("Session is required")
         try:
-            category = await CategoryDAO.get(category_id, session)
+            category = await CategoryDAO.get(category_id, session=session)
             await session.delete(category)
             await session.flush()
             logger.info(f"Category {category.id} deleted")
