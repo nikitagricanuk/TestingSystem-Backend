@@ -8,8 +8,6 @@ from fastapi import Security
 from fastapi import Body
 import re
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi_pagination import Page, Params, create_page
-from fastapi_pagination.ext.sqlalchemy import paginate
 
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +16,7 @@ from app.core.databases import async_session_maker
 from app.core.permissions import Permissions
 from app.repositories.dao.exceptions import SchoolNotFoundError, UserAlreadyExistsError
 from app.repositories.dao.userdao import UserDAO, RoleEnum
-from app.schemas.users import User, UserCreate, LoginResponse, LoginRequest, UserCreateStudent, UserFull, UserShort
+from app.schemas.users import User, UserCreate, LoginResponse, LoginRequest, UserCreateStudent, UserFull, UserShort, School as SchoolSchema
 from app.utils.password import get_hashed_password, verify_password
 from app.services.auth.jwt_service import get_jwt_service, JWTService
 from app.services.auth.sessions import Session
@@ -114,6 +112,15 @@ async def get_current_user(
 
     created_at_unix = int(db_user.created_at.timestamp()) if getattr(db_user, "created_at", None) else None
     updated_at_unix = int(db_user.updated_at.timestamp()) if getattr(db_user, "updated_at", None) else None
+    school_schema = None
+    school_obj = getattr(db_user, "school", None)
+    if school_obj is not None:
+        school_schema = SchoolSchema(
+            id=school_obj.id,
+            full_name=school_obj.full_name,
+            short_name=getattr(school_obj, "short_name", None),
+            city_id=school_obj.city_id,
+        )
 
     return UserFull(
         id=db_user.id,
@@ -129,7 +136,7 @@ async def get_current_user(
         nickname=cast(Optional[str], getattr(db_user, "nickname", None)),  # ← add this
         age=cast(Optional[int], getattr(db_user, "age", None)),
         phone=cast(Optional[str], getattr(db_user, "phone_number", None)),
-        school_id=cast(Optional[str], getattr(db_user, "school_id", None)),
+        school=school_schema,
     )
 
 
@@ -233,7 +240,7 @@ async def create_student_account(user: UserCreateStudent) -> User:
             phone=user.phone,
             password=hashed_password,
             role=await UserDAO().get_role_id(RoleEnum.STUDENT),
-            school_id=user.school_id,
+            school_id=user.school.id if user.school is not None else None,
         )
     except SchoolNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
@@ -261,6 +268,12 @@ async def create_student_account(user: UserCreateStudent) -> User:
 @router.post("/users/create", response_model=User)
 async def create_user(user: dict = Body(...)) -> User:
     hashed_password = get_hashed_password(user["password"])  # tests stub this
+    school_id = None
+    if user.get("school") is not None:
+        school_value = user["school"]
+        school_id = school_value.get("id") if isinstance(school_value, dict) else school_value
+    elif user.get("school_id") is not None:
+        school_id = user.get("school_id")
 
     # Resolve role: allow enum string like "ADMIN"/"STUDENT" or a raw UUID
     role_value = user.get("role")
@@ -277,16 +290,19 @@ async def create_user(user: dict = Body(...)) -> User:
             except Exception:
                 role_id = None
 
-    created_user = await UserDAO().create(
-        full_name=user.get("full_name"),
-        nickname=user.get("nickname"),
-        age=user.get("age"),
-        email=user.get("email"),
-        phone=user.get("phone"),
-        password=hashed_password,
-        role=role_id or user.get("role"),
-        school_id=user.get("school_id"),
-    )
+    try:
+        created_user = await UserDAO().create(
+            full_name=user.get("full_name"),
+            nickname=user.get("nickname"),
+            age=user.get("age"),
+            email=user.get("email"),
+            phone=user.get("phone"),
+            password=hashed_password,
+            role=role_id or user.get("role"),
+            school_id=school_id,
+        )
+    except SchoolNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     return User(
         id=created_user.id,
         nickname=created_user.nickname,

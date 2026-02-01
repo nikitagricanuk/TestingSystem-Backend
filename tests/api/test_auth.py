@@ -30,7 +30,7 @@ def _stub_passwords(monkeypatch):
 @pytest.fixture()
 def app():
     app = FastAPI()
-    from app.routers.auth import router as auth_router
+    from app.services.auth.routers.auth import router as auth_router
     app.include_router(auth_router, prefix="/v1/auth")
     return app
 
@@ -308,7 +308,7 @@ def test_signup_student_success(client: TestClient, patch_userdao):
             "email": "ivan.petrov@example.com",
             "phone": "+79990000000",
             "password": "secret123",
-            "school_id": str(uuid4()),
+            "school": {"id": str(uuid4())},
         },
     )
     assert res.status_code == 200

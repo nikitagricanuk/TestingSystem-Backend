@@ -26,7 +26,7 @@ class RoleEnum(Enum):
 # Fields that can be updated via generic update methods (profile-level only)
 _ALLOWED_UPDATE_FIELDS = {
     "full_name", "middle_name", "last_name", "age",
-    "phone_number", "school_id"
+    "phone_number", "school", "school_id"
 }
 
 def _normalize_email(value: str) -> str:
@@ -44,14 +44,30 @@ def _filter_update_payload(payload: Mapping[str, Any]) -> dict:
     return safe
 
 
+async def _resolve_school(
+    session: AsyncSession,
+    *,
+    school: School | None = None,
+    school_id: UUID | str | None = None,
+) -> School | None:
+    if school is not None:
+        return school
+    if school_id is None:
+        return None
+    school_obj = await session.get(School, school_id)
+    if not school_obj:
+        raise SchoolNotFoundError(f"School with id {school_id} not found")
+    return school_obj
+
+
 class UserDAO:
     @connection
     async def create(self, full_name: str, nickname: str, age: int, email: str, phone: str,
-                     password: str, role: UUID, school_id: str | None = None,
+                     password: str, role: UUID, school: School | None = None,
+                     school_id: UUID | str | None = None,
                      session = None) -> User:
         email = _normalize_email(email)
-        if not await session.get(School, school_id):
-            raise SchoolNotFoundError(f"School with id {school_id} not found")
+        school_obj = await _resolve_school(session, school=school, school_id=school_id)
         try:
             user = User(
                 full_name=full_name,
@@ -61,7 +77,7 @@ class UserDAO:
                 phone_number=phone,
                 password=password,
                 role_id=role,  # Use the same session
-                school_id=school_id
+                school=school_obj,
             )
         except UniqueViolationError as e:
             logger.error("Failed to create user email=%s due to unique violation: %s", email, e)
@@ -104,7 +120,10 @@ class UserDAO:
     async def get_user_by_id(self, user_id: UUID | str, session: Optional[AsyncSession] = None) -> Optional[User]:
         result = await session.execute(
             select(User)
-            .options(selectinload(User.role).selectinload(Role.permissions))
+            .options(
+                selectinload(User.role).selectinload(Role.permissions),
+                selectinload(User.school),
+            )
             .where(User.id == user_id)
         )
         return result.scalar_one_or_none()
@@ -131,6 +150,24 @@ class UserDAO:
             logger.warning("update_user_by_id: user %s not found", user_id)
             return None
         safe = _filter_update_payload(user_data)
+        school_key = None
+        if "school" in safe:
+            school_key = "school"
+        elif "school_id" in safe:
+            school_key = "school_id"
+        if school_key is not None:
+            school_value = safe.pop(school_key)
+            if school_value is None:
+                user.school = None
+            elif isinstance(school_value, School):
+                user.school = school_value
+            else:
+                school_id = getattr(school_value, "id", None)
+                if school_id is None and isinstance(school_value, Mapping):
+                    school_id = school_value.get("id")
+                if school_id is None:
+                    school_id = school_value
+                user.school = await _resolve_school(session, school_id=school_id)
         for key, value in safe.items():
             setattr(user, key, value)
         try:
@@ -152,6 +189,24 @@ class UserDAO:
             logger.warning("update_user_by_email: user %s not found", email)
             return None
         safe = _filter_update_payload(user_data)
+        school_key = None
+        if "school" in safe:
+            school_key = "school"
+        elif "school_id" in safe:
+            school_key = "school_id"
+        if school_key is not None:
+            school_value = safe.pop(school_key)
+            if school_value is None:
+                user_instance.school = None
+            elif isinstance(school_value, School):
+                user_instance.school = school_value
+            else:
+                school_id = getattr(school_value, "id", None)
+                if school_id is None and isinstance(school_value, Mapping):
+                    school_id = school_value.get("id")
+                if school_id is None:
+                    school_id = school_value
+                user_instance.school = await _resolve_school(session, school_id=school_id)
         for key, value in safe.items():
             setattr(user_instance, key, value)
         try:

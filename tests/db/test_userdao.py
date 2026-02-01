@@ -89,7 +89,7 @@ class TestUserDAO:
             phone="1234567890",
             password="securepassword123",
             role=uuid.UUID("e39ee8be-9f09-4818-81fc-8ed56ff5ed75"),
-            school_id=test_session.admin_school.id,
+            school=test_session.admin_school,
             session=test_session
         )
         from sqlalchemy import select
@@ -110,7 +110,7 @@ class TestUserDAO:
             phone="0987654321",
             password="anotherpassword123",
             role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
-            school_id=test_session.student_school.id,
+            school=test_session.student_school,
             session=test_session
         )
         user_id = user.id
@@ -129,7 +129,7 @@ class TestUserDAO:
             phone="1122334455",
             password="password123",
             role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
-            school_id=test_session.student_school.id,
+            school=test_session.student_school,
             session=test_session
         )
         user_id = user.id
@@ -152,7 +152,7 @@ class TestUserDAO:
             phone="2233445566",
             password="password456",
             role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
-            school_id=test_session.student_school.id,
+            school=test_session.student_school,
             session=test_session
         )
         updated_data = {
@@ -174,7 +174,7 @@ class TestUserDAO:
             phone="3344556677",
             password="password789",
             role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
-            school_id=test_session.student_school.id,
+            school=test_session.student_school,
             session=test_session
         )
         user_id = user.id
@@ -192,7 +192,7 @@ class TestUserDAO:
             phone="4455667788",
             password="password101",
             role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
-            school_id=test_session.student_school.id,
+            school=test_session.student_school,
             session=test_session
         )
         await dao.delete_user_by_email("test@test.com", session=test_session)
@@ -209,7 +209,7 @@ class TestUserDAO:
             phone="5566778899",
             password="password202",
             role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
-            school_id=test_session.student_school.id,
+            school=test_session.student_school,
             session=test_session
         )
         has_permission = await dao.check_permission_by_id(user.id, "read_users", session=test_session)
@@ -225,7 +225,7 @@ class TestUserDAO:
             phone="55646778899",
             password="password202",
             role=uuid.UUID("e39ee8be-9f09-4818-81fc-8ed56ff5ed75"),
-            school_id=test_session.admin_school.id,
+            school=test_session.admin_school,
             session=test_session
         )
         has_permission = await dao.check_permission_by_id(user.id, "read_users", session=test_session)
@@ -242,7 +242,7 @@ class TestUserDAO:
             phone="100200300",
             password="s3cret",
             role=uuid.UUID("e39ee8be-9f09-4818-81fc-8ed56ff5ed75"),
-            school_id=test_session.admin_school.id,
+            school=test_session.admin_school,
             session=test_session,
         )
         has_perm = await dao.check_permission_by_email(
@@ -260,7 +260,7 @@ class TestUserDAO:
             phone="400500600",
             password="passw0rd",
             role=uuid.UUID("c6cb0394-d382-46d2-b932-f559c05bfa9c"),
-            school_id=test_session.student_school.id,
+            school=test_session.student_school,
             session=test_session,
         )
         has_perm = await dao.check_permission_by_email(
@@ -278,7 +278,7 @@ class TestUserDAO:
             phone="777777777",
             password="pw",
             role=uuid.UUID("e39ee8be-9f09-4818-81fc-8ed56ff5ed75"),
-            school_id=test_session.admin_school.id,
+            school=test_session.admin_school,
             session=test_session,
         )
         # Check a permission that doesn't exist in DB at all

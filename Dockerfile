@@ -13,10 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- Install Poetry (no venv; we’ll install into system env for simplicity)
-ENV POETRY_HOME=/opt/poetry
 ENV POETRY_VERSION=2.1.4
-RUN curl -sSL https://install.python-poetry.org | python - --version ${POETRY_VERSION} \
- && ln -s ${POETRY_HOME}/bin/poetry /usr/local/bin/poetry
+RUN pip install "poetry==${POETRY_VERSION}"
 
 # ---- Copy only dependency files first to leverage Docker cache
 COPY pyproject.toml poetry.lock* ./
