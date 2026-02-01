@@ -1,276 +1,240 @@
-import uuid
 from uuid import UUID
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request, HTTPException
+import json
 
-from ..schemas.sessions import Session
-from app.utils.helpers import load_questions_from_json
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from pydantic import BaseModel
+
+from ..schemas.sessions import Session, SessionDelete, SessionQuestion
 from ..session_service import SessionService
 from app.core.log import setup_logger
+from ..question_bank.question_bank import get_qb, load_questions_from_json
+from app.services.auth.routers.auth import get_current_user
+from app.schemas.users import UserFull
 
 
 router = APIRouter()
 
 logger = setup_logger(__name__)
 
-def serialize_session_question(session_question):
-    """
-    Convert a SessionQuestion-like object into a JSON-serializable dict.
-    Expects an object with `.index` and `.question` attributes.
-    """
-    q = session_question.question
-    # Try to get a dict representation from the underlying question model
-    if hasattr(q, "dict"):
-        data = q.dict()
-    else:
-        data = q.__dict__.copy()
+class AnswerPayload(BaseModel):
+    answer: str
 
-    # Ensure id is a string where possible
-    if "id" in data:
-        try:
-            data["id"] = str(data["id"])
-        except Exception:
-            pass
 
-    return {
-        "index": session_question.index,
-        "question": data,
-    }
+def _question_text(question: object) -> str:
+    for attr in ("content", "question"):
+        value = getattr(question, attr, None)
+        if isinstance(value, str):
+            return value
+    return str(question)
 
-@router.post("/tests/{test_id}/start")
-async def create_session(test_id: UUID, request: Request) -> Session:
+
+def _question_status(answers: dict[str, str], index: int) -> str:
+    return "answered" if str(index) in answers else "unanswered"
+
+
+@router.post("/tests/{testId}/start", response_model=Session, status_code=status.HTTP_201_CREATED)
+async def create_session(
+    testId: UUID,
+    request: Request,
+    current_user: UserFull = Depends(get_current_user),
+) -> Session:
     """Start new test session"""
-    mock_uid = UUID('20bf9faa-5399-4747-90c1-3bad4e8d4afc')
-    questions = load_questions_from_json() # Mock loading questions
+    questions = load_questions_from_json()
 
     question_ids = [qid for qid in (q.id for q in questions)]
 
     session = await SessionService.create(
-        user_id=mock_uid,
-        test_id=test_id,
+        user_id=current_user.id,
+        test_id=testId,
         question_ids=question_ids,
         indefinite_questions=False,
-        ip_address=request.client.host
+        ip_address=request.client.host,
+        device_type=request.headers.get("User-Agent"),
+        qb=get_qb(),
     )
     logger.debug(f"Created new session with ID: {session.session.sid}")
     return await session.get()
 
 
-@router.get("/tests/sessions")
-async def get_session_list():
+@router.get("/tests/session/list", response_model=list[Session])
+async def get_session_list(current_user: UserFull = Depends(get_current_user)):
     """Get session list"""
-
-    return {
-        "status": "not_implemented",
-        "operationId": "get_tests_sessions",
-        "echo": {}
-    }
+    qb = get_qb()
+    sessions = await SessionService.user_sessions(current_user.id)
+    return [await SessionService(session, qb).get() for session in sessions]
 
 
-@router.get("/tests/session/{session-id}")
-async def get_tests_session_session_id(session_id: UUID):
+@router.get("/tests/session/{sid}", response_model=Session)
+async def get_tests_session_session_id(sid: UUID, current_user: UserFull = Depends(get_current_user)):
     """Get session info"""
-    session = await SessionService.load(str(session_id))
-    if session is None:
-        return HTTPException(status_code=404, detail="Session not found")
+    session = await SessionService.load(str(sid), get_qb())
+    if session is None or str(session.session.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     return await session.get()
 
 
-@router.delete("/tests/session/{session-id}")
-async def delete_tests_session_session_id(session_id: UUID):
+@router.delete("/tests/session/{sid}", response_model=SessionDelete)
+async def delete_tests_session_session_id(sid: UUID, current_user: UserFull = Depends(get_current_user)):
     """Cancel session"""
-    session = await SessionService.load(str(session_id))
-    if session is None:
-        return HTTPException(status_code=404, detail="Session not found")
+    session = await SessionService.load(str(sid), get_qb())
+    if session is None or str(session.session.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    await session.close()
-    return None
+    closed = await session.close()
+    deleted_at = closed.time_finish
+    deleted_at_unix = int(deleted_at.timestamp()) if deleted_at else None
+    return SessionDelete(
+        sid=closed.sid,
+        deleted_at=deleted_at,
+        deleted_at_unix=deleted_at_unix,
+    )
 
 
-@router.get("/tests/session/{session-id}/question/list")
-async def get_tests_session_session_id_question_list(session_id: UUID):
+@router.get("/tests/session/{sid}/question/list", response_model=list[SessionQuestion])
+async def get_tests_session_session_id_question_list(
+    sid: UUID,
+    current_user: UserFull = Depends(get_current_user),
+):
     """List all questions"""
-    session = await SessionService.load(str(session_id))
-    if session is None:
-        return HTTPException(status_code=404, detail="Session not found")
+    session_service = await SessionService.load(str(sid), get_qb())
+    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    question = session.question
-    questions = await question.list()
+    question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
+    answers = json.loads(session_service.session.answers or "{}")
+    questions: list[SessionQuestion] = []
+
+    for index, question_id in enumerate(question_ids):
+        question = await session_service.qb.get_question(question_id)
+        questions.append(
+            SessionQuestion(
+                index=index,
+                question=_question_text(question),
+                status=_question_status(answers, index),
+            )
+        )
+
     return questions
 
 
-@router.get("/tests/session/{session-id}/question/{question-id}")
-async def get_tests_session_session_id_question_question_id(session_id: UUID, question_id: UUID):
-    """Get question with specified ID"""
-    session_service = await SessionService.load(str(session_id))
-    if session_service is None:
-        return {
-            "status": "error",
-            "message": "Session not found",
-            "operationId": "get_tests_session_session_id_question_question_id",
-            "echo": {"session-id": session_id, "question-id": question_id}
-        }
+@router.get("/tests/session/{sid}/question/next", response_model=SessionQuestion)
+async def get_tests_session_session_id_question_next(
+    sid: UUID,
+    current_user: UserFull = Depends(get_current_user),
+):
+    """Get next question in session"""
+    session_service = await SessionService.load(str(sid), get_qb())
+    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
-    qid_str = str(question_id)
-    try:
-        index = question_ids.index(qid_str)
-    except ValueError:
-        return {
-            "status": "error",
-            "message": "Question not found in this session",
-            "operationId": "get_tests_session_session_id_question_question_id",
-            "echo": {"session-id": session_id, "question-id": question_id}
-        }
+    next_index = session_service.session.current_question_index + 1
+    if next_index >= len(question_ids):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No next question")
 
-    sq = await session_service.get_question_by_index(index)  # type: ignore[attr-defined]
-    if sq is None:
-        return {
-            "status": "error",
-            "message": "Question not found",
-            "operationId": "get_tests_session_session_id_question_question_id",
-            "echo": {"session-id": session_id, "question-id": question_id}
-        }
+    session_service.session.current_question_index = next_index
+    session_service.session.last_activity = datetime.now(timezone.utc)
+    await session_service.session.save()
 
-    return {
-        "status": "ok",
-        "operationId": "get_tests_session_session_id_question_question_id",
-        "echo": {"session-id": session_id, "question-id": question_id},
-        "data": serialize_session_question(sq),
-    }
+    question = await session_service.qb.get_question(question_ids[next_index])
+    answers = json.loads(session_service.session.answers or "{}")
+    return SessionQuestion(
+        index=next_index,
+        question=_question_text(question),
+        status=_question_status(answers, next_index),
+    )
 
 
-@router.get("/tests/session/{session-id}/question/next")
-async def get_tests_session_session_id_question_next(session_id: UUID):
-    """Get next question in session"""
-    session_service = await SessionService.load(str(session_id))
-    if session_service is None:
-        return {
-            "status": "error",
-            "message": "Session not found",
-            "operationId": "get_tests_session_session_id_question_next",
-            "echo": {"session-id": session_id}
-        }
-
-    current = await session_service.get_current_question()
-    if current is None:
-        return {
-            "status": "error",
-            "message": "No current question for this session",
-            "operationId": "get_tests_session_session_id_question_next",
-            "echo": {"session-id": session_id}
-        }
-
-    next_q = await current.next()
-    if next_q is None:
-        return {
-            "status": "error",
-            "message": "No next question",
-            "operationId": "get_tests_session_session_id_question_next",
-            "echo": {"session-id": session_id}
-        }
-
-    return {
-        "status": "ok",
-        "operationId": "get_tests_session_session_id_question_next",
-        "echo": {"session-id": session_id},
-        "data": serialize_session_question(next_q),
-    }
-
-
-@router.get("/tests/session/{session-id}/question/prev")
-async def get_tests_session_session_id_question_prev(session_id: UUID):
+@router.get("/tests/session/{sid}/question/prev", response_model=SessionQuestion)
+async def get_tests_session_session_id_question_prev(
+    sid: UUID,
+    current_user: UserFull = Depends(get_current_user),
+):
     """Get previous question in session"""
-    session_service = await SessionService.load(str(session_id))
-    if session_service is None:
-        return {
-            "status": "error",
-            "message": "Session not found",
-            "operationId": "get_tests_session_session_id_question_prev",
-            "echo": {"session-id": session_id}
-        }
+    session_service = await SessionService.load(str(sid), get_qb())
+    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    current = await session_service.get_current_question()
-    if current is None:
-        return {
-            "status": "error",
-            "message": "No current question for this session",
-            "operationId": "get_tests_session_session_id_question_prev",
-            "echo": {"session-id": session_id}
-        }
+    question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
+    prev_index = session_service.session.current_question_index - 1
+    if prev_index < 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No previous question")
 
-    prev_q = await current.prev()
-    if prev_q is None:
-        return {
-            "status": "error",
-            "message": "No previous question",
-            "operationId": "get_tests_session_session_id_question_prev",
-            "echo": {"session-id": session_id}
-        }
+    session_service.session.current_question_index = prev_index
+    session_service.session.last_activity = datetime.now(timezone.utc)
+    await session_service.session.save()
 
-    return {
-        "status": "ok",
-        "operationId": "get_tests_session_session_id_question_prev",
-        "echo": {"session-id": session_id},
-        "data": serialize_session_question(prev_q),
-    }
+    question = await session_service.qb.get_question(question_ids[prev_index])
+    answers = json.loads(session_service.session.answers or "{}")
+    return SessionQuestion(
+        index=prev_index,
+        question=_question_text(question),
+        status=_question_status(answers, prev_index),
+    )
 
 
-@router.post("/tests/session/{session-id}/question/{question-id}/answer")
-async def post_tests_session_session_id_question_question_id_answer(
-    session_id: UUID,
+@router.get("/tests/session/{sid}/question/{question_id}", response_model=SessionQuestion)
+async def get_tests_session_session_id_question_question_id(
+    sid: UUID,
     question_id: UUID,
-    payload: dict,
+    current_user: UserFull = Depends(get_current_user),
+):
+    """Get question with specified ID"""
+    session_service = await SessionService.load(str(sid), get_qb())
+    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
+    try:
+        index = question_ids.index(question_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found") from exc
+
+    question = await session_service.get_question_by_index(index)
+    answers = json.loads(session_service.session.answers or "{}")
+    return SessionQuestion(
+        index=index,
+        question=_question_text(question),
+        status=_question_status(answers, index),
+    )
+
+
+@router.post("/tests/session/{sid}/question/{question_id}/answer", response_model=Session)
+async def post_tests_session_session_id_question_question_id_answer(
+    sid: UUID,
+    question_id: UUID,
+    payload: AnswerPayload = Body(...),
+    current_user: UserFull = Depends(get_current_user),
 ):
     """Submit answer to the question"""
-    session_service = await SessionService.load(str(session_id))
-    if session_service is None:
-        return {
-            "status": "error",
-            "message": "Session not found",
-            "operationId": "post_tests_session_session_id_question_question_id_answer",
-            "echo": {"session-id": session_id, "question-id": question_id}
-        }
-
-    answer = payload.get("answer")
-    if answer is None:
-        return {
-            "status": "error",
-            "message": "Missing 'answer' in request body",
-            "operationId": "post_tests_session_session_id_question_question_id_answer",
-            "echo": {"session-id": session_id, "question-id": question_id, "body": payload}
-        }
+    session_service = await SessionService.load(str(sid), get_qb())
+    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
-    qid_str = str(question_id)
     try:
-        index = question_ids.index(qid_str)
-    except ValueError:
-        return {
-            "status": "error",
-            "message": "Question not found in this session",
-            "operationId": "post_tests_session_session_id_question_question_id_answer",
-            "echo": {"session-id": session_id, "question-id": question_id, "body": payload}
-        }
+        index = question_ids.index(question_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found") from exc
 
     # Use the service method to record the answer
-    await session_service.answer_current_question(index, answer)
+    await session_service.answer_current_question(index, payload.answer)
 
     # Return updated session info
     return await session_service.get()
 
 
-@router.post("/tests/session/{session-id}/submit")
-async def post_tests_session_session_id_submit(session_id: UUID):
+@router.post("/tests/session/{sid}/submit", response_model=Session)
+async def post_tests_session_session_id_submit(
+    sid: UUID,
+    current_user: UserFull = Depends(get_current_user),
+):
     """Submit answers and finish the session"""
-    session = await SessionService.load(str(session_id))
-    if session is None:
-        return {
-            "status": "error",
-            "message": "Session not found",
-            "operationId": "post_tests_session_session_id_submit",
-            "echo": {"session-id": session_id}
-        }
+    session = await SessionService.load(str(sid), get_qb())
+    if session is None or str(session.session.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     await session.finish()
-    return None
+    return await session.get()

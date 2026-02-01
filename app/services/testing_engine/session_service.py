@@ -33,7 +33,8 @@ class SessionService:
             question_ids: list[UUID],
             indefinite_questions: bool,
             ip_address: str,
-            qb: QuestionBank
+            qb: QuestionBank,
+            device_type: Optional[str] = None,
     ) -> Self:
         """
         Create a new testing session and wrap it in SessionService.
@@ -49,6 +50,7 @@ class SessionService:
             questions_remaining=len(question_ids),
             indefinite_questions=indefinite_questions,
             ip_address=ip_address,
+            device_type=device_type,
             answers=json.dumps({}),
             questions_answered=0,
             current_question_index=0,
@@ -129,17 +131,36 @@ class SessionService:
     async def next_question(self) -> Question:
         self.session.current_question_index += 1
         self.session.last_activity = datetime.now(timezone.utc)
+        await self.session.save()
         return await self.get_current_question()
 
     async def prev_question(self) -> Question:
         self.session.current_question_index -= 1
         self.session.last_activity = datetime.now(timezone.utc)
+        await self.session.save()
         return await self.get_current_question()
 
     async def get(self) -> SessionSchema:
         """
         Get the current session info.
         """
+        status_value = self.session.status
+        if isinstance(status_value, SessionStatus):
+            status_value = status_value.value
+        status_map = {
+            SessionStatus.ACTIVE.value: "active",
+            SessionStatus.FINISHED.value: "completed",
+            SessionStatus.CLOSED.value: "expired",
+            SessionStatus.CREATED.value: "active",
+        }
+        normalized_status = status_map.get(str(status_value), "active")
+        score = getattr(self.session, "score", None)
+        duration_seconds = getattr(self.session, "duration", None)
+        if duration_seconds is None and normalized_status == "active":
+            duration_seconds = int(
+                datetime.now(timezone.utc).timestamp()
+                - self.session.time_start.replace(tzinfo=timezone.utc).timestamp()
+            )
         return SessionSchema(
             sid=self.session.sid,
             test_id=self.session.test_id,
@@ -149,15 +170,17 @@ class SessionService:
             time_finish=self.session.time_finish,
             time_finish_unix=int(self.session.time_finish.replace(
                 tzinfo=timezone.utc).timestamp()) if self.session.time_finish else None,
-            duration_seconds=int(datetime.now(timezone.utc).timestamp() - self.session.time_start.replace(
-                tzinfo=timezone.utc).timestamp()) if self.session.status == SessionStatus.ACTIVE else None,
-            indefinite_questions=self.session.indefinite_questions,
+            duration_seconds=duration_seconds,
+            time_left_seconds=None,
             total_questions=self.session.questions_answered + self.session.questions_remaining,
             questions_answered=self.session.questions_answered,
             questions_remaining=self.session.questions_remaining,
             current_question_index=self.session.current_question_index,
-            status=self.session.status.value,
+            status=normalized_status,
+            is_submitted=normalized_status == "completed",
+            score=score,
             ip_address=self.session.ip_address,
+            device_type=getattr(self.session, "device_type", None),
             last_activity_unix=int(self.session.last_activity.replace(tzinfo=timezone.utc).timestamp()),
         )
 
@@ -210,7 +233,7 @@ class SessionService:
         """
         session = self.session
 
-        if session.status == SessionStatus.FINISHED.value:
+        if session.status in (SessionStatus.FINISHED, SessionStatus.FINISHED.value):
             # Already finished; you can also raise if you prefer.
             return session
 
@@ -235,7 +258,7 @@ class SessionService:
         """
         session = self.session
 
-        if session.status == SessionStatus.CLOSED:
+        if session.status in (SessionStatus.CLOSED, SessionStatus.CLOSED.value):
             return session
 
         session.status = SessionStatus.CLOSED

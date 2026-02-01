@@ -56,6 +56,9 @@ class QuestionBank:
         questions = load_questions_from_json()
         return questions[rint(0, len(questions)-1)]
 
+    async def get_question(self, qid: UUID) -> Question:
+        return await self.get(qid)
+
     async def update(self, question: Question):
         pass
 

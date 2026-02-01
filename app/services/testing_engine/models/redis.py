@@ -21,12 +21,17 @@ class Session(HashModel):
     time_start: datetime = Field(default_factory=datetime.utcnow)
     time_finish: Optional[datetime] = None
     indefinite_questions: int = Field(index=False, default=0)
-    question_ids: str  # Вернуть тип на 'str'
+    question_ids: str  # JSON list of UUIDs
+    questions_remaining: int = 0
     questions_answered: int = 0
+    answers: str = Field(default="{}")
     current_question_index: int = 0
     status: SessionStatus = SessionStatus.CREATED
     ip_address: Optional[str] = Field(index=False)
+    device_type: Optional[str] = Field(index=False)
     last_activity: datetime = Field(default_factory=datetime.utcnow, index=False)
+    duration: Optional[int] = Field(index=False, default=None)
+    score: Optional[float] = Field(index=False, default=None)
 
     @validator('time_start', 'time_finish', pre=True)
     def parse_datetime(cls, v):
