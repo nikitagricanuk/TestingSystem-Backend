@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional
 
 class Session(BaseModel):
     sid: Optional[UUID] = Field(None)
@@ -13,13 +13,16 @@ class Session(BaseModel):
     time_finish: Optional[datetime] = Field(None)
     time_finish_unix: Optional[int] = Field(None)
     duration_seconds: Optional[int] = Field(None)
-    indefinite_questions: Optional[bool] = Field(None)
+    time_left_seconds: Optional[int] = Field(None)
     total_questions: Optional[int] = Field(None)
     questions_answered: Optional[int] = Field(None)
     questions_remaining: Optional[int] = Field(None)
     current_question_index: Optional[int] = Field(None)
     status: Optional[str] = Field(None)
+    is_submitted: Optional[bool] = Field(None)
+    score: Optional[float] = Field(None)
     ip_address: Optional[str] = Field(None)
+    device_type: Optional[str] = Field(None)
     last_activity_unix: Optional[int] = Field(None)
 
 class SessionDelete(BaseModel):
@@ -30,6 +33,4 @@ class SessionDelete(BaseModel):
 class SessionQuestion(BaseModel):
     index: Optional[int] = Field(None)
     question: Optional[str] = Field(None)
-    category: Optional[str] = Field(None)
-    choices: Optional[List[str]] = Field(None)
     status: Optional[str] = Field(None)

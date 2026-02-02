@@ -1,5 +1,7 @@
 from fastapi import FastAPI
-from .routers import results, sessions, auth
+from .routers import results
+from .services.testing_engine.routers import sessions
+from .services.auth.routers import auth
 
 
 def create_app() -> FastAPI:

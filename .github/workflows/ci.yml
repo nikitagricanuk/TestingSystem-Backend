@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Dummy config so Pydantic Settings doesn't crash at import time
+    env:
+      DB_USER: test
+      DB_PASSWORD: test
+      REDIS_USER: test
+      REDIS_PASSWORD: test
+      # Optional: make sure your app doesn't think it's "prod"
+      ENVIRONMENT: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "poetry==2.1.4"
+
+      - name: Configure Poetry
+        run: |
+          poetry config virtualenvs.in-project true
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py311-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py311-
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-ansi
+
+      # Optional quality gates (enable if you actually have these in dev deps)
+      # - name: Ruff (lint)
+      #   run: poetry run ruff check .
+      # - name: Ruff (format check)
+      #   run: poetry run ruff format --check .
+
+      - name: Run tests
+        run: poetry run pytest -q --maxfail=1 --disable-warnings
