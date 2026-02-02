@@ -18,17 +18,24 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema: rename table and add new column safely."""
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    table_names = set(inspector.get_table_names())
+
     # 1) Rename the table IN-PLACE (preserves data, indexes, FKs).
     #    If you use a schema (e.g., "public"), pass schema="public".
-    op.rename_table("cities", "settlements")
+    if "cities" in table_names and "settlements" not in table_names:
+        op.rename_table("cities", "settlements")
 
     # 2) Add the new column as nullable first (to avoid failing on existing rows).
     #    Note: 'type' is allowed as a column name in Postgres, but if you prefer,
     #    you can use 'settlement_type' instead in your ORM & here.
-    op.add_column(
-        "settlements",
-        sa.Column("type", sa.String(length=50), nullable=True),
-    )
+    settlement_columns = {col["name"] for col in inspector.get_columns("settlements")}
+    if "type" not in settlement_columns:
+        op.add_column(
+            "settlements",
+            sa.Column("type", sa.String(length=50), nullable=True),
+        )
 
     # 3) Backfill existing rows. Adjust default value as you wish.
     op.execute("UPDATE settlements SET type = 'city' WHERE type IS NULL")
@@ -50,8 +57,16 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema: drop added column and rename table back."""
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    table_names = set(inspector.get_table_names())
+
     # 1) Relax by dropping the added column.
-    op.drop_column("settlements", "type")
+    if "settlements" in table_names:
+        settlement_columns = {col["name"] for col in inspector.get_columns("settlements")}
+        if "type" in settlement_columns:
+            op.drop_column("settlements", "type")
 
     # 2) Rename table back.
-    op.rename_table("settlements", "cities")
+    if "settlements" in table_names and "cities" not in table_names:
+        op.rename_table("settlements", "cities")
