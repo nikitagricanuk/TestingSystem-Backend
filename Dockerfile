@@ -3,18 +3,21 @@ ARG PYTHON_VERSION=3.11-slim
 FROM mirror.gcr.io/python:${PYTHON_VERSION} AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PATH="$POETRY_HOME/bin:$PATH"
 
 WORKDIR /app
 
 # System deps (build tools optional; keep if you compile wheels)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl build-essential git \
+        curl build-essential git libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- Install Poetry (no venv; we’ll install into system env for simplicity)
+ENV POETRY_HOME=/opt/poetry
 ENV POETRY_VERSION=2.1.4
-RUN pip install "poetry==${POETRY_VERSION}"
+RUN curl -sSL https://install.python-poetry.org | python - --version ${POETRY_VERSION} \
+ && ln -s ${POETRY_HOME}/bin/poetry /usr/local/bin/poetry
 
 # ---- Copy only dependency files first to leverage Docker cache
 COPY pyproject.toml poetry.lock* ./
@@ -36,6 +39,3 @@ EXPOSE 8000
 
 # A) Uvicorn directly (simplest). Replace 'your_module.app:app' with your ASGI import path.
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# B) Or Gunicorn with Uvicorn workers:
-# CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "your_module.app:app", "--bind", "0.0.0.0:8000"]

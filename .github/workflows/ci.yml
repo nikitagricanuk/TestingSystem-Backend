@@ -23,6 +23,9 @@ jobs:
     env:
       DB_USER: test
       DB_PASSWORD: test
+      DB_HOST: localhost
+      DB_NAME: test_db
+      DB_PORT: "5432"
       REDIS_USER: test
       REDIS_PASSWORD: test
       # Optional: make sure your app doesn't think it's "prod"

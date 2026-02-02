@@ -2,6 +2,12 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.models import Base
+
 
 def _install_redis_stub():
     if "redis" in sys.modules:
@@ -68,6 +74,7 @@ def _install_databases_stub():
     def connection(method):
         async def wrapper(*args, **kwargs):
             return await method(*args, **kwargs)
+
         return wrapper
 
     def init_redis_connection():  # pragma: no cover - import stub
@@ -180,6 +187,33 @@ def _install_aredis_om_stub():
 
 _install_aredis_om_stub()
 
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest_asyncio.fixture
+async def async_test_session():
+    engine = create_async_engine(TEST_DATABASE_URL, echo=False, future=True)
+
+    async_session_maker = sessionmaker(
+        engine, expire_on_commit=False, class_=AsyncSession
+    )
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with async_session_maker() as session:
+        try:
+            yield session
+        finally:
+            await session.rollback()
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+    await engine.dispose()
