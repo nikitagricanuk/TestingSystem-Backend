@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  packages: write   # required to push to GHCR
+  packages: write
 
 concurrency:
   group: docker-push-staging-${{ github.ref }}
@@ -16,11 +16,17 @@ concurrency:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30   # multi-arch can take longer
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Enables cross-arch builds (arm64) on amd64 runner
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -32,12 +38,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/nikitagricanuk/testingsystem-backend:staging
             ghcr.io/nikitagricanuk/testingsystem-backend:sha-${{ github.sha }}
