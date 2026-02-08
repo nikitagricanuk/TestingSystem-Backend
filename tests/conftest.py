@@ -2,6 +2,10 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -186,11 +190,6 @@ def _install_aredis_om_stub():
 
 
 _install_aredis_om_stub()
-
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
