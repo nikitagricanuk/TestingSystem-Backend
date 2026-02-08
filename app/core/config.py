@@ -1,14 +1,14 @@
-from pydantic import computed_field
+from pydantic import computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=None)  # None, чтобы использовать только env контейнера
 
-    db_host: str
-    db_port: int
-    db_name: str
-    db_user: str
-    db_password: str
+    db_host: str = "localhost"
+    db_port: int = 5432
+    db_name: str = "testing_system"
+    db_user: str = "testing_system"
+    db_password: str = "testing_system"
 
     # Redis settings
     redis_host: str = 'redis'
@@ -26,6 +26,20 @@ class Settings(BaseSettings):
     auth_jwt_refresh_secret_key: str = "e3b7f969145c8c041c8845e2f9f0e21a98fcc7c0f7ca8e71a7bf69aa69a14544"
     auth_jwt_issuer: str = "testing-system-api"
     auth_jwt_audience: str = "testing-system-spa"
+
+    @field_validator("db_host", "db_name", "db_user", "db_password", mode="before")
+    @classmethod
+    def _default_if_none(cls, value: str | None, info):
+        if value in (None, "", "None"):
+            return cls.model_fields[info.field_name].default
+        return value
+
+    @field_validator("db_port", mode="before")
+    @classmethod
+    def _coerce_db_port(cls, value: int | str | None):
+        if value in (None, "", "None"):
+            return cls.model_fields["db_port"].default
+        return value
 
     @property
     def get_redis_url(self) -> str:
