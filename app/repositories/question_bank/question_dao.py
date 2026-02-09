@@ -1,5 +1,6 @@
-from typing import Optional, Mapping, Any, Sequence
+from typing import Optional, Mapping, Any, Sequence, Iterable
 from uuid import UUID
+from sqlalchemy.orm import aliased
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -130,6 +131,27 @@ class QuestionDAO:
         result = await session.execute(query)
         return result.scalars().all()
 
+    @staticmethod
+    @connection
+    async def list_by_category(
+            category_id: UUID,
+            include_descendants: bool,
+            session: AsyncSession,
+    ) -> Sequence[Question]:
+        if not session:
+            raise QuestionDAOError("Session is required")
+        if include_descendants:
+            category_cte = select(Category.id).where(Category.id == category_id).cte(recursive=True)
+            category_alias = aliased(Category)
+            category_cte = category_cte.union_all(
+                select(category_alias.id).where(category_alias.parent_id == category_cte.c.id)
+            )
+            query = select(Question).where(Question.category_id.in_(select(category_cte.c.id)))
+        else:
+            query = select(Question).where(Question.category_id == category_id)
+        result = await session.execute(query)
+        return result.scalars().all()
+
 class CategoryDAO:
     @staticmethod
     @connection
@@ -160,6 +182,61 @@ class CategoryDAO:
         category = result.scalar_one_or_none()
         if not category:
             raise CategoryNotFound(f"Category {category_id} not found")
+        return category
+
+    @staticmethod
+    @connection
+    async def get_by_name(name: str, parent_id: Optional[UUID], session: AsyncSession) -> Optional[Category]:
+        if not session:
+            raise CategoryDAOError("Session is required")
+        query = select(Category).where(Category.category == name)
+        if parent_id is None:
+            query = query.where(Category.parent_id.is_(None))
+        else:
+            query = query.where(Category.parent_id == parent_id)
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    @connection
+    async def get_by_path(path: Iterable[str], session: AsyncSession) -> Category:
+        if not session:
+            raise CategoryDAOError("Session is required")
+        path_list = list(path)
+        parent_id: Optional[UUID] = None
+        category: Optional[Category] = None
+        for name in path_list:
+            category = await CategoryDAO.get_by_name(name, parent_id, session=session)
+            if not category:
+                raise CategoryNotFound(f"Category path {'/'.join(path_list)} not found")
+            parent_id = category.id
+        if not category:
+            raise CategoryNotFound("Category path is empty")
+        return category
+
+    @staticmethod
+    @connection
+    async def get_or_create_path(path: Iterable[str], session: AsyncSession) -> Category:
+        if not session:
+            raise CategoryDAOError("Session is required")
+        path_list = list(path)
+        parent_id: Optional[UUID] = None
+        category: Optional[Category] = None
+        for name in path_list:
+            category = await CategoryDAO.get_by_name(name, parent_id, session=session)
+            if not category:
+                category = Category(category=name, parent_id=parent_id)
+                session.add(category)
+                try:
+                    await session.flush()
+                    logger.info(f"Category {category.id} created")
+                except IntegrityError as e:
+                    await session.rollback()
+                    logger.error(f"Failed to create category: {e}")
+                    raise CategoryCreateError(f"Category '{name}' already exists") from e
+            parent_id = category.id
+        if not category:
+            raise CategoryCreateError("Category path is empty")
         return category
 
     @staticmethod

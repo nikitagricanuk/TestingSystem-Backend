@@ -943,3 +943,277 @@ async def test_get_questions_without_specific_ids_uses_bank_ids(async_test_sessi
     assert len(questions) == 3
     result_ids = [q.id for q in questions]
     assert result_ids == question_ids
+
+
+@pytest.mark.asyncio
+async def test_for_owner_creates_bank(async_test_session):
+    category = await CategoryDAO.create("Math", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+
+    question_data = {
+        "text": "1+1",
+        "answer": {"correct": 2},
+        "category_id": category.id,
+        "teacher_id": teacher_id,
+        "question_type": "text",
+        "problem": "Simple",
+        "mark_out_of": 5,
+        "penalty": 0,
+        "is_active": True,
+    }
+
+    await QuestionDAO.add_question(question_data, session=async_test_session)
+    await async_test_session.commit()
+
+    bank = await TestBank.for_owner(
+        owner_id=teacher_id,
+        session=async_test_session,
+        name="My Test"
+    )
+
+    assert bank.owner_id == teacher_id
+    assert len(bank.question_ids) == 1
+    assert bank.name == "My Test"
+
+
+    @pytest.mark.asyncio
+    async def test_for_owner_returns_same_instance(async_test_session):
+        teacher_id = uuid4()
+
+        bank1 = await TestBank.for_owner(teacher_id, session=async_test_session)
+        bank2 = await TestBank.for_owner(teacher_id, session=async_test_session)
+
+        assert bank1 is bank2
+
+
+    @pytest.mark.asyncio
+    async def test_for_owner_empty_when_no_questions(async_test_session):
+        teacher_id = uuid4()
+
+        bank = await TestBank.for_owner(teacher_id, session=async_test_session)
+
+        assert bank.question_ids == []
+
+@pytest.mark.asyncio
+async def test_list_questions_by_category_id(async_test_session):
+    category = await CategoryDAO.create("Physics", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+
+    for i in range(2):
+        await QuestionDAO.add_question(
+            {
+                "text": f"Q{i}",
+                "answer": {"correct": i},
+                "category_id": category.id,
+                "teacher_id": teacher_id,
+                "question_type": "text",
+                "problem": "P",
+                "mark_out_of": 5,
+                "penalty": 0,
+                "is_active": True,
+            },
+            session=async_test_session,
+        )
+
+    await async_test_session.commit()
+
+    bank = TestBank(owner_id=teacher_id, question_ids=[], cache=QuestionCache())
+
+    questions = await bank.list_questions_by_category(
+        session=async_test_session,
+        category_id=category.id,
+    )
+
+    assert len(questions) == 2
+    assert all(q.category_id == category.id for q in questions)
+
+
+    @pytest.mark.asyncio
+    async def test_list_questions_by_category_path(async_test_session):
+        category = await CategoryDAO.get_or_create_path(
+            ["Science", "Biology"], session=async_test_session
+        )
+        await async_test_session.commit()
+
+        teacher_id = uuid4()
+
+        await QuestionDAO.add_question(
+            {
+                "text": "Bio Q",
+                "answer": {"correct": 1},
+                "category_id": category.id,
+                "teacher_id": teacher_id,
+                "question_type": "text",
+                "problem": "Bio",
+                "mark_out_of": 5,
+                "penalty": 0,
+                "is_active": True,
+            },
+            session=async_test_session,
+        )
+        await async_test_session.commit()
+
+        bank = TestBank(owner_id=teacher_id, question_ids=[], cache=QuestionCache())
+
+        questions = await bank.list_questions_by_category(
+            session=async_test_session,
+            category_path=["Science", "Biology"],
+        )
+
+        assert len(questions) == 1
+        assert questions[0].text == "Bio Q"
+
+
+    @pytest.mark.asyncio
+    async def test_list_questions_by_category_requires_param(async_test_session):
+        bank = TestBank(owner_id=uuid4(), question_ids=[], cache=QuestionCache())
+
+        with pytest.raises(ValueError):
+            await bank.list_questions_by_category(session=async_test_session)
+
+@pytest.mark.asyncio
+async def test_create_question_with_category_id(async_test_session):
+    category = await CategoryDAO.create("IT", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+    bank = TestBank(owner_id=teacher_id, question_ids=[], cache=QuestionCache())
+
+    question = await bank.create_question(
+        question_data={
+            "text": "Python?",
+            "answer": {"correct": "Yes"},
+            "category_id": category.id,
+            "question_type": "text",
+            "problem": "Lang",
+            "mark_out_of": 5,
+            "penalty": 0,
+            "is_active": True,
+        },
+        session=async_test_session,
+    )
+
+    assert question.teacher_id == teacher_id
+    assert question.id in bank.question_ids
+
+
+    @pytest.mark.asyncio
+    async def test_create_question_with_category_path(async_test_session):
+        teacher_id = uuid4()
+        bank = TestBank(owner_id=teacher_id, question_ids=[], cache=QuestionCache())
+
+        question = await bank.create_question(
+            question_data={
+                "text": "Path Q",
+                "answer": {"correct": 1},
+                "question_type": "text",
+                "problem": "Path",
+                "mark_out_of": 5,
+                "penalty": 0,
+                "is_active": True,
+            },
+            category_path=["Root", "Sub"],
+            session=async_test_session,
+        )
+
+        assert question.category_id is not None
+        assert question.id in bank.question_ids
+
+
+    @pytest.mark.asyncio
+    async def test_create_question_requires_category(async_test_session):
+        teacher_id = uuid4()
+        bank = TestBank(owner_id=teacher_id, question_ids=[], cache=QuestionCache())
+
+        with pytest.raises(ValueError):
+            await bank.create_question(
+                question_data={"text": "Fail"},
+                session=async_test_session,
+            )
+
+
+@pytest.mark.asyncio
+async def test_update_question_updates_data(async_test_session):
+    category = await CategoryDAO.create("Upd", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+
+    question = await QuestionDAO.add_question(
+        {
+            "text": "Old",
+            "answer": {"correct": 1},
+            "category_id": category.id,
+            "teacher_id": teacher_id,
+            "question_type": "text",
+            "problem": "Old",
+            "mark_out_of": 5,
+            "penalty": 0,
+            "is_active": True,
+        },
+        session=async_test_session,
+    )
+    await async_test_session.commit()
+
+    cache = QuestionCache()
+    cache.set(question)
+
+    bank = TestBank(owner_id=teacher_id, question_ids=[question.id], cache=cache)
+
+    updated = await bank.update_question(
+        question.id,
+        {"text": "New"},
+        session=async_test_session,
+    )
+
+    assert updated.text == "New"
+    assert cache.get(question.id) is None
+
+
+    @pytest.mark.asyncio
+    async def test_update_question_not_found(async_test_session):
+        bank = TestBank(owner_id=uuid4(), question_ids=[], cache=QuestionCache())
+
+        with pytest.raises(QuestionNotFoundError):
+            await bank.update_question(uuid4(), {"text": "X"}, session=async_test_session)
+
+@pytest.mark.asyncio
+async def test_get_question_success(async_test_session):
+    category = await CategoryDAO.create("Get", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+
+    question = await QuestionDAO.add_question(
+        {
+            "text": "Get me",
+            "answer": {"correct": 1},
+            "category_id": category.id,
+            "teacher_id": teacher_id,
+            "question_type": "text",
+            "problem": "Get",
+            "mark_out_of": 5,
+            "penalty": 0,
+            "is_active": True,
+        },
+        session=async_test_session,
+    )
+    await async_test_session.commit()
+
+    bank = TestBank(owner_id=teacher_id, question_ids=[question.id], cache=QuestionCache())
+
+    fetched = await bank.get_question(question.id, session=async_test_session)
+
+    assert fetched.id == question.id
+
+
+    @pytest.mark.asyncio
+    async def test_get_question_not_found(async_test_session):
+        bank = TestBank(owner_id=uuid4(), question_ids=[], cache=QuestionCache())
+
+        with pytest.raises(QuestionNotFoundError):
+            await bank.get_question(uuid4(), session=async_test_session)

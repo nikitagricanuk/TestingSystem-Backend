@@ -280,7 +280,7 @@ async def test_question_crud(async_test_session):
     @pytest.mark.asyncio
     async def test_get_by_teacher_returns_empty_for_no_questions(async_test_session):
         teacher_id = uuid4()
-        questions = await QuestionDAO.get_by_teacher(teacher_id, session=async_test_session)
+        questions = await QuestionDAO.get_by_teacherа(teacher_id, session=async_test_session)
         assert len(questions) == 0
 
     @pytest.mark.asyncio
@@ -420,3 +420,52 @@ async def test_question_crud(async_test_session):
         questions = await QuestionDAO.search(session=async_test_session, invalid_field="value")
 
         assert len(questions) == 1
+
+@pytest.mark.asyncio
+async def test_question_list_with_offset_limit(async_test_session):
+    category = await CategoryDAO.create("ListTest", session=async_test_session)
+    await async_test_session.commit()
+
+    for i in range(5):
+        await QuestionDAO.add_question({
+            "text": f"Q{i}",
+            "answer": {"correct": i},
+            "category_id": category.id,
+            "teacher_id": uuid4(),
+            "question_type": "text",
+            "problem": "Test",
+            "mark_out_of": 5,
+            "penalty": 0,
+            "is_active": True,
+        }, session=async_test_session)
+
+    await async_test_session.commit()
+
+    questions = await QuestionDAO.list(offset=1, limit=2, session=async_test_session)
+    assert len(questions) == 2
+
+@pytest.mark.asyncio
+async def test_list_by_category_no_descendants(async_test_session):
+    category = await CategoryDAO.create("Root", session=async_test_session)
+    await async_test_session.commit()
+
+    q = await QuestionDAO.add_question({
+        "text": "Root Q",
+        "answer": {"correct": 1},
+        "category_id": category.id,
+        "teacher_id": uuid4(),
+        "question_type": "text",
+        "problem": "Test",
+        "mark_out_of": 5,
+        "penalty": 0,
+        "is_active": True,
+    }, session=async_test_session)
+
+    await async_test_session.commit()
+
+    questions = await QuestionDAO.list_by_category(
+        category.id, include_descendants=False, session=async_test_session
+    )
+
+    assert len(questions) == 1
+    assert questions[0].id == q.id
