@@ -109,6 +109,27 @@ class QuestionDAO:
             raise QuestionDeleteError(f"Failed to delete question {question_id}") from e
 
 
+    @staticmethod
+    @connection
+    async def get_by_teacher(teacher_id: UUID, session:AsyncSession) -> Sequence[Question]:
+        if not session:
+            raise QuestionDAOError("Session is required")
+        result = await session.execute(select(Question).where(Question.teacher_id == teacher_id))
+        return result.scalars().all()
+
+    @staticmethod
+    @connection
+    async def search(session: AsyncSession, **filters) -> Sequence[Question]:
+        if not session:
+            raise QuestionDAOError("Session is required")
+        query = select(Question)
+        for field, value in filters.items():
+            if value is not None and hasattr(Question, field):
+                query = query.where(getattr(Question, field) == value)
+
+        result = await session.execute(query)
+        return result.scalars().all()
+
 class CategoryDAO:
     @staticmethod
     @connection
@@ -200,3 +221,4 @@ class CategoryDAO:
             await session.rollback()
             logger.error(f"Failed to delete category {category_id}: {e}")
             raise CategoryDeleteError(f"Failed to delete category {category_id}") from e
+

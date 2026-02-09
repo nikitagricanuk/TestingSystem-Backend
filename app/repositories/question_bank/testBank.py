@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.lazy_question import LazyQuestion
 from app.core.question_cache import QuestionCache
-
+from app.repositories.question_bank.question_dao import QuestionDAO
+from app.repositories.question_bank.models import Question
 
 class TestBank:
     def __init__(
@@ -31,9 +32,9 @@ class TestBank:
         session: AsyncSession,
         limit: int,
         random_order: bool = False,
+        question_ids: List[UUID] | None = None,
     ) -> AsyncIterator[LazyQuestion]:
-        ids = self.question_ids.copy()
-
+        ids = question_ids if question_ids is not None else self.question_ids.copy()
         if random_order:
             random.shuffle(ids)
 
@@ -41,3 +42,39 @@ class TestBank:
 
         for question_id in ids:
             yield self._get_question(question_id, session)
+
+
+    async def warmup_cache(self, session: AsyncSession, question_ids: List[UUID] | None = None) -> None:
+        ids_to_load = question_ids or self.question_ids
+
+        for question_id in ids_to_load:
+            if self.cache.get(question_id) is None:
+                question = await QuestionDAO.get(question_id, session=session)
+                self.cache.set(question)
+
+
+    async def get_all_teacher_questions(self, session: AsyncSession) -> List[Question]:
+        return await QuestionDAO.get_by_teacher(self.owner_id, session=session)
+
+    async def delete_question(self, question_id: UUID, session: AsyncSession) -> None:
+        await QuestionDAO.delete(question_id, session=session)
+        self.cache.invalidate(question_id)
+        if question_id in self.question_ids:
+            self.question_ids.remove(question_id)
+
+    async def search_questions(self, session: AsyncSession, **filters) -> List[Question]:
+        return await QuestionDAO.search(session=session, **filters)
+
+    async def create_question_in_Test(self, question_data: dict, session: AsyncSession) -> Question:
+        question_data["teacher_id"] = self.owner_id
+        question = await QuestionDAO.add_question(question_data, session=session)
+        self.question_ids.append(question.id)
+        return question
+
+    async def update_question_in_Test(self, question_id: UUID, data: dict, session: AsyncSession) -> Question:
+        question = await QuestionDAO.update(question_id, data, session=session)
+        self.cache.invalidate(question_id)
+        return question
+
+    async def get_question_in_Test(self, question_id: UUID, session: AsyncSession) -> Question:
+        return await QuestionDAO.get(question_id, session=session)
