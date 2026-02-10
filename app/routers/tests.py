@@ -143,9 +143,10 @@ async def update_test(
             total_questions = len(await TestDAO.list_questions(test_id, session=session))
             _validate_required_questions(data.get("number_of_required_questions"), total_questions)
         updated = await TestDAO.update(test_id, data, session=session)
+        questions = await TestDAO.list_questions(test_id, session=session)
         await session.commit()
-    questions = await TestDAO.list_questions(test_id)
-    return _test_out(updated, len(questions))
+        await session.refresh(updated)
+        return _test_out(updated, len(questions))
 
 
 @router.delete("/tests/{test_id}", response_model=TestDelete)

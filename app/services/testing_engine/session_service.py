@@ -73,16 +73,48 @@ class SessionService:
         try:
             session = await Session.get(session_id)
         except NotFoundError:
+            session = None
+
+        if session is not None:
+            return cls(session, qb)
+
+        try:
+            pk_iter = await Session.all_pks()
+            async for pk in pk_iter:
+                try:
+                    candidate = await Session.get(pk)
+                except NotFoundError:
+                    continue
+                if str(candidate.sid) == str(session_id):
+                    return cls(candidate, qb)
+        except Exception:
             return None
 
-        return cls(session, qb)
+        return None
 
     @classmethod
     async def user_sessions(cls, user_id: UUID) -> List[Session]:
         """
         Get all sessions for a given user.
         """
-        sessions = await Session.find(Session.user_id == str(user_id)).all()
+        try:
+            query = Session.find(Session.user_id == str(user_id))
+            return await query.all()
+        except Exception:
+            pass
+
+        sessions: list[Session] = []
+        try:
+            pk_iter = await Session.all_pks()
+            async for pk in pk_iter:
+                try:
+                    session = await Session.get(pk)
+                except NotFoundError:
+                    continue
+                if str(session.user_id) == str(user_id):
+                    sessions.append(session)
+        except Exception:
+            return []
         return sessions
 
     # --------- Object methods (no session_id argument) ---------
@@ -238,10 +270,12 @@ class SessionService:
             return session
 
         session.status = SessionStatus.FINISHED
-        session.time_finish = datetime.now(timezone.utc)
-        session.duration = int(
-            (session.time_finish - session.time_start).total_seconds()
-        )
+        time_finish = datetime.now(timezone.utc)
+        time_start = session.time_start or time_finish
+        if time_start.tzinfo is None:
+            time_start = time_start.replace(tzinfo=timezone.utc)
+        session.time_finish = time_finish
+        session.duration = int((time_finish - time_start).total_seconds())
 
         question_ids = await self._get_question_ids()
         # Load questions from Redis
@@ -262,10 +296,12 @@ class SessionService:
             return session
 
         session.status = SessionStatus.CLOSED
-        session.time_finish = datetime.utcnow()
-        session.duration = int(
-            (session.time_finish - session.time_start).total_seconds()
-        )
+        time_finish = datetime.now(timezone.utc)
+        time_start = session.time_start or time_finish
+        if time_start.tzinfo is None:
+            time_start = time_start.replace(tzinfo=timezone.utc)
+        session.time_finish = time_finish
+        session.duration = int((time_finish - time_start).total_seconds())
         await session.save()
         return session
 

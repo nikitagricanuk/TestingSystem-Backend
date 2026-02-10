@@ -31,11 +31,10 @@ COPY . .
 
 # Create non-root user (after files are present so chown is fast if needed)
 RUN adduser --disabled-password --gecos "" --home "/nonexistent" --shell "/sbin/nologin" --no-create-home appuser
+RUN chmod +x /app/entrypoint.sh
 USER appuser
 
 EXPOSE 8000
 
-# Choose one of the commands below:
-
-# A) Uvicorn directly (simplest). Replace 'your_module.app:app' with your ASGI import path.
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

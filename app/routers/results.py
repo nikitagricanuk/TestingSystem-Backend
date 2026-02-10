@@ -3,6 +3,7 @@ import json
 from uuid import UUID
 
 from aredis_om import NotFoundError
+from aredis_om.model.model import QueryNotSupportedError
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.schemas.results import Result, LeaderboardEntry, GroupScore
@@ -121,16 +122,59 @@ async def _build_result(session: SessionModel) -> Result:
     )
 
 
+async def _load_session(session_id: UUID) -> SessionModel | None:
+    try:
+        return await SessionModel.get(str(session_id))
+    except NotFoundError:
+        pass
+
+    try:
+        pk_iter = await SessionModel.all_pks()
+        async for pk in pk_iter:
+            try:
+                candidate = await SessionModel.get(pk)
+            except NotFoundError:
+                continue
+            if str(candidate.sid) == str(session_id):
+                return candidate
+    except Exception:
+        return None
+    return None
+
+
+async def _load_finished_sessions() -> list[SessionModel]:
+    try:
+        return await SessionModel.find(SessionModel.status == SessionStatus.FINISHED).all()
+    except QueryNotSupportedError:
+        pass
+    except Exception:
+        pass
+
+    sessions: list[SessionModel] = []
+    try:
+        pk_iter = await SessionModel.all_pks()
+        async for pk in pk_iter:
+            try:
+                session = await SessionModel.get(pk)
+            except NotFoundError:
+                continue
+            status_value = session.status.value if isinstance(session.status, SessionStatus) else str(session.status)
+            if status_value == SessionStatus.FINISHED.value:
+                sessions.append(session)
+    except Exception:
+        return []
+    return sessions
+
+
 @router.get("/tests/result/{id}", response_model=Result)
 async def get_tests_result_result_id(
     id: UUID,
     current_user: UserFull = Depends(get_current_user),
 ) -> Result:
     """Get test result by ID"""
-    try:
-        session = await SessionModel.get(str(id))
-    except NotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Result not found") from exc
+    session = await _load_session(id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Result not found")
 
     if str(session.user_id) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Result not available")
@@ -142,7 +186,7 @@ async def get_tests_result_result_id(
 async def get_tests_leaderboard(
     current_user: UserFull = Depends(get_current_user),
 ) -> list[LeaderboardEntry]:
-    sessions = await SessionModel.find(SessionModel.status == SessionStatus.FINISHED).all()
+    sessions = await _load_finished_sessions()
     if not sessions:
         return []
 

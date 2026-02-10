@@ -22,14 +22,17 @@ class TestDAO:
         try:
             return NavigationMethod(value)
         except Exception:
-            return None
+            try:
+                return NavigationMethod(value.lower())
+            except Exception:
+                return None
 
     @staticmethod
     @connection
     async def create(data: dict[str, Any], session: AsyncSession = None) -> Test:
         nav = TestDAO._normalize_navigation(data.get("navigation_method"))
         if nav is not None:
-            data["navigation_method"] = nav
+            data["navigation_method"] = nav.value
         test = Test(**data)
         session.add(test)
         try:
@@ -61,7 +64,7 @@ class TestDAO:
         if "navigation_method" in data:
             nav = TestDAO._normalize_navigation(data.get("navigation_method"))
             if nav is not None:
-                data["navigation_method"] = nav
+                data["navigation_method"] = nav.value
         for key, value in data.items():
             setattr(test, key, value)
         try:
