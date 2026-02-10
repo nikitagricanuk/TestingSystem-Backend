@@ -128,14 +128,17 @@ async def _load_session(session_id: UUID) -> SessionModel | None:
     except NotFoundError:
         pass
 
-    pk_iter = await SessionModel.all_pks()
-    async for pk in pk_iter:
-        try:
-            candidate = await SessionModel.get(pk)
-        except NotFoundError:
-            continue
-        if str(candidate.sid) == str(session_id):
-            return candidate
+    try:
+        pk_iter = await SessionModel.all_pks()
+        async for pk in pk_iter:
+            try:
+                candidate = await SessionModel.get(pk)
+            except NotFoundError:
+                continue
+            if str(candidate.sid) == str(session_id):
+                return candidate
+    except Exception:
+        return None
     return None
 
 
@@ -148,15 +151,18 @@ async def _load_finished_sessions() -> list[SessionModel]:
         pass
 
     sessions: list[SessionModel] = []
-    pk_iter = await SessionModel.all_pks()
-    async for pk in pk_iter:
-        try:
-            session = await SessionModel.get(pk)
-        except NotFoundError:
-            continue
-        status_value = session.status.value if isinstance(session.status, SessionStatus) else str(session.status)
-        if status_value == SessionStatus.FINISHED.value:
-            sessions.append(session)
+    try:
+        pk_iter = await SessionModel.all_pks()
+        async for pk in pk_iter:
+            try:
+                session = await SessionModel.get(pk)
+            except NotFoundError:
+                continue
+            status_value = session.status.value if isinstance(session.status, SessionStatus) else str(session.status)
+            if status_value == SessionStatus.FINISHED.value:
+                sessions.append(session)
+    except Exception:
+        return []
     return sessions
 
 

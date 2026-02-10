@@ -78,14 +78,17 @@ class SessionService:
         if session is not None:
             return cls(session, qb)
 
-        pk_iter = await Session.all_pks()
-        async for pk in pk_iter:
-            try:
-                candidate = await Session.get(pk)
-            except NotFoundError:
-                continue
-            if str(candidate.sid) == str(session_id):
-                return cls(candidate, qb)
+        try:
+            pk_iter = await Session.all_pks()
+            async for pk in pk_iter:
+                try:
+                    candidate = await Session.get(pk)
+                except NotFoundError:
+                    continue
+                if str(candidate.sid) == str(session_id):
+                    return cls(candidate, qb)
+        except Exception:
+            return None
 
         return None
 
@@ -94,15 +97,24 @@ class SessionService:
         """
         Get all sessions for a given user.
         """
+        try:
+            query = Session.find(Session.user_id == str(user_id))
+            return await query.all()
+        except Exception:
+            pass
+
         sessions: list[Session] = []
-        pk_iter = await Session.all_pks()
-        async for pk in pk_iter:
-            try:
-                session = await Session.get(pk)
-            except NotFoundError:
-                continue
-            if str(session.user_id) == str(user_id):
-                sessions.append(session)
+        try:
+            pk_iter = await Session.all_pks()
+            async for pk in pk_iter:
+                try:
+                    session = await Session.get(pk)
+                except NotFoundError:
+                    continue
+                if str(session.user_id) == str(user_id):
+                    sessions.append(session)
+        except Exception:
+            return []
         return sessions
 
     # --------- Object methods (no session_id argument) ---------

@@ -25,6 +25,13 @@ class AnswerPayload(BaseModel):
 
 async def _load_user_session(sid: UUID, current_user: UserFull) -> SessionService | None:
     qb = get_qb()
+    try:
+        loaded = await SessionService.load(str(sid), qb)
+        if loaded and str(loaded.session.user_id) == str(current_user.id):
+            return loaded
+    except Exception:
+        loaded = None
+
     sessions = await SessionService.user_sessions(current_user.id)
     for session in sessions:
         if str(session.sid) == str(sid):
