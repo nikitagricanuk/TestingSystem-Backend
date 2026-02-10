@@ -84,7 +84,7 @@ jobs:
         run: docker compose exec -T server alembic upgrade head
 
       - name: Run e2e tests
-        run: pytest tests/e2e -m e2e
+        run: poetry run pytest tests/e2e -m e2e
 
       - name: Dump logs on failure
         if: failure()
