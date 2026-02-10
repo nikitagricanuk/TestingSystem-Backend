@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from .routers import results, health
+from .routers import results, health, question_bank
 from .services.testing_engine.routers import sessions
 from .services.auth.routers import auth
 
@@ -14,6 +14,7 @@ def create_app() -> FastAPI:
     app.include_router(sessions.router, prefix="", tags=['sessions'], include_in_schema=False)
     app.include_router(sessions.router, prefix="/v1", tags=['sessions'])
     app.include_router(auth.router, prefix="/v1/auth", tags=['auth'])
+    app.include_router(question_bank.router, prefix="/v1", tags=['question-bank'])
     return app
 
 
