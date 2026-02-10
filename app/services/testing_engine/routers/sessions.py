@@ -23,6 +23,15 @@ class AnswerPayload(BaseModel):
     answer: str
 
 
+async def _load_user_session(sid: UUID, current_user: UserFull) -> SessionService | None:
+    qb = get_qb()
+    sessions = await SessionService.user_sessions(current_user.id)
+    for session in sessions:
+        if str(session.sid) == str(sid):
+            return SessionService(session, qb)
+    return None
+
+
 def _question_text(question: object) -> str:
     for attr in ("content", "question"):
         value = getattr(question, attr, None)
@@ -74,8 +83,8 @@ async def get_session_list(current_user: UserFull = Depends(get_current_user)):
 @router.get("/tests/session/{sid}", response_model=Session)
 async def get_tests_session_session_id(sid: UUID, current_user: UserFull = Depends(get_current_user)):
     """Get session info"""
-    session = await SessionService.load(str(sid), get_qb())
-    if session is None or str(session.session.user_id) != str(current_user.id):
+    session = await _load_user_session(sid, current_user)
+    if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     return await session.get()
@@ -84,8 +93,8 @@ async def get_tests_session_session_id(sid: UUID, current_user: UserFull = Depen
 @router.delete("/tests/session/{sid}", response_model=SessionDelete)
 async def delete_tests_session_session_id(sid: UUID, current_user: UserFull = Depends(get_current_user)):
     """Cancel session"""
-    session = await SessionService.load(str(sid), get_qb())
-    if session is None or str(session.session.user_id) != str(current_user.id):
+    session = await _load_user_session(sid, current_user)
+    if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     closed = await session.close()
@@ -104,8 +113,8 @@ async def get_tests_session_session_id_question_list(
     current_user: UserFull = Depends(get_current_user),
 ):
     """List all questions"""
-    session_service = await SessionService.load(str(sid), get_qb())
-    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+    session_service = await _load_user_session(sid, current_user)
+    if session_service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
@@ -131,8 +140,8 @@ async def get_tests_session_session_id_question_next(
     current_user: UserFull = Depends(get_current_user),
 ):
     """Get next question in session"""
-    session_service = await SessionService.load(str(sid), get_qb())
-    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+    session_service = await _load_user_session(sid, current_user)
+    if session_service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
@@ -159,8 +168,8 @@ async def get_tests_session_session_id_question_prev(
     current_user: UserFull = Depends(get_current_user),
 ):
     """Get previous question in session"""
-    session_service = await SessionService.load(str(sid), get_qb())
-    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+    session_service = await _load_user_session(sid, current_user)
+    if session_service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
@@ -188,8 +197,8 @@ async def get_tests_session_session_id_question_question_id(
     current_user: UserFull = Depends(get_current_user),
 ):
     """Get question with specified ID"""
-    session_service = await SessionService.load(str(sid), get_qb())
-    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+    session_service = await _load_user_session(sid, current_user)
+    if session_service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
@@ -215,8 +224,8 @@ async def post_tests_session_session_id_question_question_id_answer(
     current_user: UserFull = Depends(get_current_user),
 ):
     """Submit answer to the question"""
-    session_service = await SessionService.load(str(sid), get_qb())
-    if session_service is None or str(session_service.session.user_id) != str(current_user.id):
+    session_service = await _load_user_session(sid, current_user)
+    if session_service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
@@ -238,8 +247,8 @@ async def post_tests_session_session_id_submit(
     current_user: UserFull = Depends(get_current_user),
 ):
     """Submit answers and finish the session"""
-    session = await SessionService.load(str(sid), get_qb())
-    if session is None or str(session.session.user_id) != str(current_user.id):
+    session = await _load_user_session(sid, current_user)
+    if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     await session.finish()
     return await session.get()

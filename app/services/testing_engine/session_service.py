@@ -258,10 +258,12 @@ class SessionService:
             return session
 
         session.status = SessionStatus.FINISHED
-        session.time_finish = datetime.now(timezone.utc)
-        session.duration = int(
-            (session.time_finish - session.time_start).total_seconds()
-        )
+        time_finish = datetime.now(timezone.utc)
+        time_start = session.time_start or time_finish
+        if time_start.tzinfo is None:
+            time_start = time_start.replace(tzinfo=timezone.utc)
+        session.time_finish = time_finish
+        session.duration = int((time_finish - time_start).total_seconds())
 
         question_ids = await self._get_question_ids()
         # Load questions from Redis
@@ -282,10 +284,12 @@ class SessionService:
             return session
 
         session.status = SessionStatus.CLOSED
-        session.time_finish = datetime.utcnow()
-        session.duration = int(
-            (session.time_finish - session.time_start).total_seconds()
-        )
+        time_finish = datetime.now(timezone.utc)
+        time_start = session.time_start or time_finish
+        if time_start.tzinfo is None:
+            time_start = time_start.replace(tzinfo=timezone.utc)
+        session.time_finish = time_finish
+        session.duration = int((time_finish - time_start).total_seconds())
         await session.save()
         return session
 
