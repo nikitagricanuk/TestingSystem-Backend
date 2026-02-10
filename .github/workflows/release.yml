@@ -121,6 +121,7 @@ jobs:
           key: ${{ secrets.DEPLOY_KEY }}
           source: "./compose.yaml,./compose.prod.yaml,./.env"
           target: "~/.deploy/${{ github.event.repository.name }}/"
+          overwrite: true
 
       - name: Run remote db migrations
         uses: appleboy/ssh-action@v0.1.5
