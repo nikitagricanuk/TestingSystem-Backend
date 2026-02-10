@@ -36,7 +36,6 @@ services:
   server:
     restart: always
     image: ghcr.io/${IMAGE_REPO}:${RELEASE_VERSION}
-    build: null
     ports:
       - "8000:8000"
     healthcheck:
@@ -56,6 +55,10 @@ services:
       - REDIS_USER=${REDIS_USER:-default}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       - REDIS_OM_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - VIRTUAL_HOST=${HOST_DOMAIN}
+      - LETSENCRYPT_HOST=${HOST_DOMAIN}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+      - VIRTUAL_PORT=8000
     depends_on:
       db:
         condition: service_healthy
@@ -64,7 +67,6 @@ services:
 
   migrate:
     image: ghcr.io/${IMAGE_REPO}:${RELEASE_VERSION}
-    build: null
     command: ["alembic", "upgrade", "head"]
     environment:
       - DB_NAME=${DB_NAME}
