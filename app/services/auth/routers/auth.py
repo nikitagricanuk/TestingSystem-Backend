@@ -230,9 +230,10 @@ async def logout(payload: LogoutRequest, jwt: JWTService = Depends(get_jwt_servi
     session = None
     try:
         refresh_claims, session = await jwt.validate_refresh_and_get_session(payload.refresh_token)
-    except ValueError:
-        # Session can be missing in Redis; still revoke refresh token based on claims
-        pass
+    except ValueError as e:
+        # Session can be missing in Redis; still revoke refresh token based on claims.
+        if "session not found" not in str(e):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from e
 
     # Revoke allow-list entry by jti and mark session inactive
     jti = refresh_claims.get("jti") or claims.get("jti")
