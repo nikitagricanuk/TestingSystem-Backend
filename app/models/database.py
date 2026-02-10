@@ -5,12 +5,15 @@ if TYPE_CHECKING:
 
 from sqlalchemy import (
     String, Integer, Boolean, ForeignKey, Text,
-    UniqueConstraint, Table, Column, Index
+    UniqueConstraint, Table, Column, Index, Enum, DateTime
 )
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 import uuid
+from datetime import datetime
 from . import Base
+import enum
 
 
 # Association table for role and permission (many-to-many)
@@ -102,3 +105,47 @@ class User(Base):
 
     questions: Mapped[list["Question"]] = relationship("Question", back_populates="teacher")
 
+
+class NavigationMethod(enum.Enum):
+    FREE = "free"
+    LINEAR = "linear"
+
+
+class Test(Base):
+    __tablename__ = "tests"
+
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    end_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    number_of_required_questions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shuffle: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    navigation_method: Mapped[NavigationMethod] = mapped_column(
+        Enum(NavigationMethod, name="navigation_method_enum"),
+        nullable=False,
+        default=NavigationMethod.FREE,
+    )
+    can_be_reviewed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    welcome_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    questions: Mapped[list["TestQuestion"]] = relationship(
+        "TestQuestion",
+        back_populates="test",
+        cascade="all, delete-orphan",
+    )
+
+
+class TestQuestion(Base):
+    __tablename__ = "test_questions"
+    __table_args__ = (
+        UniqueConstraint("test_id", "question_id"),
+        UniqueConstraint("test_id", "position_in_test"),
+    )
+
+    test_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tests.id"), nullable=False)
+    question_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("questions.id"), nullable=False)
+    position_in_test: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    test: Mapped["Test"] = relationship("Test", back_populates="questions")
+    question: Mapped["Question"] = relationship("Question")

@@ -9,7 +9,8 @@ from pydantic import BaseModel
 from ..schemas.sessions import Session, SessionDelete, SessionQuestion
 from ..session_service import SessionService
 from app.core.log import setup_logger
-from ..question_bank.question_bank import get_qb, load_questions_from_json
+from ..question_bank.question_bank import get_qb
+from app.repositories.dao.testdao import TestDAO
 from app.services.auth.routers.auth import get_current_user
 from app.schemas.users import UserFull
 
@@ -41,9 +42,13 @@ async def create_session(
     current_user: UserFull = Depends(get_current_user),
 ) -> Session:
     """Start new test session"""
-    questions = load_questions_from_json()
-
-    question_ids = [qid for qid in (q.id for q in questions)]
+    test = await TestDAO.get(testId)
+    if not test:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+    test_questions = await TestDAO.list_questions(testId)
+    if not test_questions:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Test has no questions")
+    question_ids = [tq.question_id for tq in test_questions]
 
     session = await SessionService.create(
         user_id=current_user.id,

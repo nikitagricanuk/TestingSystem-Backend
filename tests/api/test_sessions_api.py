@@ -112,13 +112,10 @@ def override_user(app: FastAPI):
 
 def test_start_session_creates_session(client: TestClient, override_user, monkeypatch):
     from app.services.testing_engine.routers import sessions as sessions_router
+    from app.repositories.dao.testdao import TestDAO
 
     test_id = uuid4()
     question_ids = [uuid4(), uuid4()]
-    fake_questions = [SimpleNamespace(id=qid) for qid in question_ids]
-
-    def fake_load_questions():
-        return fake_questions
 
     qb = FakeQuestionBank({qid: SimpleNamespace(content=f"Q-{i}") for i, qid in enumerate(question_ids)})
 
@@ -131,9 +128,16 @@ def test_start_session_creates_session(client: TestClient, override_user, monkey
         )
         return SessionService(session, qb)
 
-    monkeypatch.setattr(sessions_router, "load_questions_from_json", fake_load_questions)
     monkeypatch.setattr(sessions_router, "get_qb", lambda: qb)
     monkeypatch.setattr(SessionService, "create", classmethod(fake_create), raising=False)
+    async def fake_get_test(_id):
+        return SimpleNamespace(id=test_id)
+
+    async def fake_list_questions(_id):
+        return [SimpleNamespace(question_id=qid) for qid in question_ids]
+
+    monkeypatch.setattr(TestDAO, "get", staticmethod(fake_get_test), raising=False)
+    monkeypatch.setattr(TestDAO, "list_questions", staticmethod(fake_list_questions), raising=False)
 
     res = client.post(f"/tests/{test_id}/start")
 
