@@ -137,6 +137,7 @@ class QuestionDAO:
             category_id: UUID,
             include_descendants: bool,
             session: AsyncSession,
+            teacher_id: UUID | None = None,
     ) -> Sequence[Question]:
         if not session:
             raise QuestionDAOError("Session is required")
@@ -149,6 +150,8 @@ class QuestionDAO:
             query = select(Question).where(Question.category_id.in_(select(category_cte.c.id)))
         else:
             query = select(Question).where(Question.category_id == category_id)
+        if teacher_id is not None:
+            query = query.where(Question.teacher_id == teacher_id)
         result = await session.execute(query)
         return result.scalars().all()
 
@@ -298,4 +301,3 @@ class CategoryDAO:
             await session.rollback()
             logger.error(f"Failed to delete category {category_id}: {e}")
             raise CategoryDeleteError(f"Failed to delete category {category_id}") from e
-

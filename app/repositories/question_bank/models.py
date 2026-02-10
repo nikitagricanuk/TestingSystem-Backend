@@ -2,7 +2,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.models.database import User
-import os
 import enum
 from sqlalchemy import Enum
 class QuestionType(enum.Enum):
@@ -18,10 +17,7 @@ from sqlalchemy import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import uuid
 
-if os.environ.get("TESTING", False):
-    JSON_TYPE = JSON       #для тестов
-else:
-    JSON_TYPE = JSONB
+JSON_TYPE = JSONB().with_variant(JSON(), "sqlite")
 
 from app.models import Base
 class Category(Base):
@@ -93,4 +89,3 @@ class Question(Base):
 
     teacher = relationship("User", back_populates="questions")
     category = relationship("Category", back_populates="questions")
-

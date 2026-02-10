@@ -80,7 +80,9 @@ class TestBank:
             self.question_ids.remove(question_id)
 
     async def search_questions(self, session: AsyncSession, **filters) -> List[Question]:
-        return await QuestionDAO.search(session=session, **filters)
+        scoped_filters = dict(filters)
+        scoped_filters["teacher_id"] = self.owner_id
+        return await QuestionDAO.search(session=session, **scoped_filters)
 
     async def list_questions_by_category(
             self,
@@ -99,6 +101,7 @@ class TestBank:
             resolved_category_id,
             include_descendants=include_descendants,
             session=session,
+            teacher_id=self.owner_id,
         )
 
     async def create_question(
@@ -124,4 +127,3 @@ class TestBank:
 
     async def get_question(self, question_id: UUID, session: AsyncSession) -> Question:
         return await QuestionDAO.get(question_id, session=session)
-
