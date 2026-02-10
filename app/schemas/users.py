@@ -74,6 +74,10 @@ class UserUpdate(BaseModel):
     role: UUID | None = None
     additional_permissions: list[str] = []
 
+class UserDelete(BaseModel):
+    id: UUID
+    username: str | None = None
+
 class LoginRequest(BaseModel):
     email: str
     password: str
