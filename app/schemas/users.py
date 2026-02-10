@@ -17,6 +17,15 @@ class User(BaseModel):
     updated_at: datetime | None = None
     updated_at_unix: int | None = None
 
+class School(BaseModel):
+    id: UUID
+    full_name: str
+    short_name: str | None = None
+    city_id: UUID
+
+class SchoolRef(BaseModel):
+    id: UUID
+
 class UserShort(BaseModel):
     id: UUID
     full_name: str
@@ -28,7 +37,7 @@ class UserFull(User):
     full_name: str
     age: int | None = None
     phone: str | None = None
-    school_id: UUID | None = None
+    school: School | None = None
     permissions: list[str] = []
 
 class UserCreate(BaseModel):
@@ -36,7 +45,7 @@ class UserCreate(BaseModel):
     nickname: str
     age: int | None = None
     phone: str | None = None
-    school_id: str | None = None
+    school: SchoolRef | None = None
     email: str
     password: str
     is_active: bool = True
@@ -48,7 +57,7 @@ class UserCreateStudent(BaseModel):
     full_name: str
     age: int | None = None
     phone: str | None = None
-    school_id: UUID | None = None
+    school: SchoolRef | None = None
     email: str
     password: str
 
@@ -58,7 +67,7 @@ class UserUpdate(BaseModel):
     last_name: str
     age: int | None = None
     phone: str | None = None
-    school_id: str | None = None
+    school: SchoolRef | None = None
     email: str
     password: str
     is_active: bool = True
