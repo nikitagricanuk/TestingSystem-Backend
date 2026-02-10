@@ -66,10 +66,22 @@ class Session(HashModel):
             return None
 
         # Query by indexed refresh_token (fast) and then apply safety checks.
+        matches: list[Session] = []
         try:
             matches = cls.find(cls.refresh_token == refresh_token).all()
         except Exception:
             matches = []
+
+        if not matches:
+            # Fallback to a full scan when the index is missing or Redisearch is unavailable.
+            try:
+                pk_iter = cls.all_pks()
+                for pk in pk_iter:
+                    candidate = cls.get(pk)
+                    if candidate and candidate.refresh_token == refresh_token:
+                        matches.append(candidate)
+            except Exception:
+                matches = []
 
         if not matches:
             return None

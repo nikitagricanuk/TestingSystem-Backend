@@ -226,18 +226,14 @@ async def logout(payload: LogoutRequest, jwt: JWTService = Depends(get_jwt_servi
         # Treat invalid/unknown refresh as already logged out
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from e
 
-    try:
-        refresh_claims, sess = await jwt.validate_refresh_and_get_session(payload.refresh_token)
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from e
-
     # Revoke allow-list entry by jti and mark session inactive
-    jti = refresh_claims.get("jti") or claims.get("jti")
+    jti = claims.get("jti")
     if jti:
         await jwt.revoke_refresh(jti)
     try:
-        if sess:
-            sess.invalidate()
+        session = Session.validate(payload.refresh_token)
+        if session:
+            session.invalidate()
     except Exception:
         # Best effort; even if session update fails, token is revoked
         pass
