@@ -297,7 +297,12 @@ class UserDAO:
 
     @connection
     async def list_users(self, session: Optional[AsyncSession] = None) -> Sequence[User]:
-        result = await session.execute(select(User))
+        result = await session.execute(
+            select(User).options(
+                selectinload(User.role),
+                selectinload(User.school),
+            )
+        )
         return result.scalars().all()
 
     @classmethod

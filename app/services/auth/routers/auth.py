@@ -16,11 +16,11 @@ from app.core.databases import async_session_maker
 from app.core.permissions import Permissions
 from app.repositories.dao.exceptions import SchoolNotFoundError, UserAlreadyExistsError
 from app.repositories.dao.userdao import UserDAO, RoleEnum
-from app.schemas.users import User, UserCreate, LoginResponse, LoginRequest, UserCreateStudent, UserFull, UserShort, School as SchoolSchema
+from app.schemas.users import User, UserCreate, LoginResponse, LoginRequest, UserCreateStudent, UserFull, UserShort, School as SchoolSchema, UserDelete
 from app.utils.password import get_hashed_password, verify_password
 from app.services.auth.jwt_service import get_jwt_service, JWTService
 from app.services.auth.sessions import Session
-from typing import Optional, cast
+from typing import Optional, cast, Any, Mapping
 
 from app.core.log import setup_logger
 
@@ -43,6 +43,84 @@ def _role_name_from_model(obj) -> Optional[str]:
     if isinstance(val, str) and UUID_RE.match(val):
         return None
     return None
+
+
+def _build_user_schema(db_user, *, include_permissions: bool = False) -> UserFull:
+    role_name = _role_name_from_model(db_user)
+    created_at = cast(Optional[datetime], getattr(db_user, "created_at", None))
+    updated_at = cast(Optional[datetime], getattr(db_user, "updated_at", None))
+    created_at_unix = int(created_at.timestamp()) if created_at else None
+    updated_at_unix = int(updated_at.timestamp()) if updated_at else None
+
+    permissions_list: list[str] = []
+    if include_permissions:
+        try:
+            user_perms = getattr(db_user, "permissions", None)
+            if user_perms:
+                permissions_list.extend(
+                    [getattr(p, "name", None) for p in user_perms if getattr(p, "name", None) is not None]
+                )
+            role = getattr(db_user, "role", None)
+            if role is not None:
+                role_perms = getattr(role, "permissions", None)
+                if role_perms:
+                    permissions_list.extend(
+                        [getattr(p, "name", None) for p in role_perms if getattr(p, "name", None) is not None]
+                    )
+            permissions_list = list(dict.fromkeys(permissions_list))
+        except Exception:
+            permissions_list = []
+
+    school_schema = None
+    try:
+        school_obj = getattr(db_user, "school", None)
+        if school_obj is not None:
+            school_schema = SchoolSchema(
+                id=school_obj.id,
+                full_name=school_obj.full_name,
+                short_name=getattr(school_obj, "short_name", None),
+                city_id=school_obj.city_id,
+            )
+    except Exception:
+        school_schema = None
+
+    return UserFull(
+        id=db_user.id,
+        email=db_user.email,
+        is_active=db_user.is_active,
+        role=role_name,
+        created_at=created_at,
+        created_at_unix=created_at_unix or 0,
+        updated_at=updated_at,
+        updated_at_unix=updated_at_unix,
+        permissions=permissions_list,
+        full_name=cast(Optional[str], getattr(db_user, "full_name", None)) or "",
+        nickname=cast(Optional[str], getattr(db_user, "nickname", None)),
+        age=cast(Optional[int], getattr(db_user, "age", None)),
+        phone=cast(Optional[str], getattr(db_user, "phone_number", None)),
+        school=school_schema,
+    )
+
+
+def _normalize_user_update(payload: Mapping[str, Any]) -> dict[str, Any]:
+    data = dict(payload)
+
+    if "phone" in data and "phone_number" not in data:
+        data["phone_number"] = data.pop("phone")
+
+    if "full_name" not in data:
+        name_parts = []
+        for key in ("first_name", "middle_name", "last_name"):
+            value = data.pop(key, None)
+            if value:
+                name_parts.append(value)
+        if name_parts:
+            data["full_name"] = " ".join(name_parts)
+    else:
+        for key in ("first_name", "middle_name", "last_name"):
+            data.pop(key, None)
+
+    return data
 
 
 router = APIRouter()
@@ -76,68 +154,7 @@ async def get_current_user(
     if not db_user or not db_user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is inactive or not found")
 
-    # Build a detached Pydantic schema to avoid lazy-load after Session close
-    role_name = None
-    try:
-        role = getattr(db_user, "role", None)
-        if role is not None:
-            # prefer `.name`, fall back to `.role` if your model uses that
-            role_name = getattr(role, "name", None)
-            if role_name is None:
-                role_name = getattr(role, "role", None)
-    except Exception as e:
-        logger.warning(f"Error retrieving role for user {db_user.id}: {e}")
-        role_name = None
-
-    try:
-        permissions_list = []
-        # 1) direct user permissions (if your model has them)
-        user_perms = getattr(db_user, "permissions", None)
-        if user_perms:
-            permissions_list.extend([
-                getattr(p, "name", None) for p in user_perms if getattr(p, "name", None) is not None
-            ])
-        # 2) permissions via role
-        role = getattr(db_user, "role", None)
-        if role is not None:
-            role_perms = getattr(role, "permissions", None)
-            if role_perms:
-                permissions_list.extend([
-                    getattr(p, "name", None) for p in role_perms if getattr(p, "name", None) is not None
-                ])
-        # de-duplicate preserving order
-        permissions_list = list(dict.fromkeys(permissions_list))
-    except Exception:
-        permissions_list = []
-
-    created_at_unix = int(db_user.created_at.timestamp()) if getattr(db_user, "created_at", None) else None
-    updated_at_unix = int(db_user.updated_at.timestamp()) if getattr(db_user, "updated_at", None) else None
-    school_schema = None
-    school_obj = getattr(db_user, "school", None)
-    if school_obj is not None:
-        school_schema = SchoolSchema(
-            id=school_obj.id,
-            full_name=school_obj.full_name,
-            short_name=getattr(school_obj, "short_name", None),
-            city_id=school_obj.city_id,
-        )
-
-    return UserFull(
-        id=db_user.id,
-        email=db_user.email,
-        is_active=db_user.is_active,
-        role=role_name,
-        created_at=cast(Optional[datetime], getattr(db_user, "created_at", None)),
-        created_at_unix=created_at_unix,
-        updated_at=cast(Optional[datetime], getattr(db_user, "updated_at", None)),
-        updated_at_unix=updated_at_unix,
-        permissions=permissions_list,
-        full_name=cast(Optional[str], getattr(db_user, "full_name", None)),
-        nickname=cast(Optional[str], getattr(db_user, "nickname", None)),  # ← add this
-        age=cast(Optional[int], getattr(db_user, "age", None)),
-        phone=cast(Optional[str], getattr(db_user, "phone_number", None)),
-        school=school_schema,
-    )
+    return _build_user_schema(db_user, include_permissions=True)
 
 
 def require_permissions(*perms: Enum):
@@ -228,6 +245,20 @@ async def get_me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+@router.patch("/users/me", response_model=User)
+async def update_me(
+    payload: dict = Body(...),
+    current_user: UserFull = Depends(get_current_user),
+) -> User:
+    update_payload = _normalize_user_update(payload)
+    if not update_payload:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updatable fields provided")
+    updated_user = await UserDAO().update_user_by_id(current_user.id, update_payload)
+    if not updated_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return _build_user_schema(updated_user)
+
+
 @router.post("/signup", response_model=User)
 async def create_student_account(user: UserCreateStudent) -> User:
     hashed_password = get_hashed_password(user.password)
@@ -314,6 +345,40 @@ async def create_user(user: dict = Body(...)) -> User:
         updated_at=created_user.updated_at,
         updated_at_unix=int(created_user.updated_at.timestamp()) if created_user.updated_at else None,
     )
+
+
+@router.get("/users", response_model=list[User])
+async def list_users() -> list[User]:
+    users = await UserDAO().list_users()
+    return [_build_user_schema(user) for user in users]
+
+
+@router.get("/users/{user_id}", response_model=User)
+async def get_user(user_id: UUID) -> User:
+    user = await UserDAO().get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return _build_user_schema(user)
+
+
+@router.patch("/users/{user_id}", response_model=User)
+async def update_user(user_id: UUID, payload: dict = Body(...)) -> User:
+    update_payload = _normalize_user_update(payload)
+    if not update_payload:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updatable fields provided")
+    updated_user = await UserDAO().update_user_by_id(user_id, update_payload)
+    if not updated_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return _build_user_schema(updated_user)
+
+
+@router.delete("/users/{user_id}", response_model=UserDelete)
+async def delete_user(user_id: UUID) -> UserDelete:
+    user = await UserDAO().get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    await UserDAO().delete_user_by_id(user_id)
+    return UserDelete(id=user_id, username=getattr(user, "email", None))
 
 
 
