@@ -73,16 +73,36 @@ class SessionService:
         try:
             session = await Session.get(session_id)
         except NotFoundError:
-            return None
+            session = None
 
-        return cls(session, qb)
+        if session is not None:
+            return cls(session, qb)
+
+        pk_iter = await Session.all_pks()
+        async for pk in pk_iter:
+            try:
+                candidate = await Session.get(pk)
+            except NotFoundError:
+                continue
+            if str(candidate.sid) == str(session_id):
+                return cls(candidate, qb)
+
+        return None
 
     @classmethod
     async def user_sessions(cls, user_id: UUID) -> List[Session]:
         """
         Get all sessions for a given user.
         """
-        sessions = await Session.find(Session.user_id == str(user_id)).all()
+        sessions: list[Session] = []
+        pk_iter = await Session.all_pks()
+        async for pk in pk_iter:
+            try:
+                session = await Session.get(pk)
+            except NotFoundError:
+                continue
+            if str(session.user_id) == str(user_id):
+                sessions.append(session)
         return sessions
 
     # --------- Object methods (no session_id argument) ---------

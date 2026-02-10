@@ -86,13 +86,7 @@ class JWTService:
         # Optionally create a server-side Session bound to this refresh token
         try:
             if session_ip is not None:
-                # subject is expected to be user id; cast to int if possible
-                try:
-                    user_id_int = int(str(subject))
-                except Exception:
-                    user_id_int = None
-                if user_id_int is not None:
-                    Session.create(user_id=user_id_int, ip=session_ip, refresh_token=refresh_token, ua=session_ua)
+                Session.create(user_id=str(subject), ip=session_ip, refresh_token=refresh_token, ua=session_ua)
         except Exception:
             # Session persistence shouldn't break token minting
             pass

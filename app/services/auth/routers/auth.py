@@ -221,17 +221,24 @@ class LogoutRequest(BaseModel):
 async def logout(payload: LogoutRequest, jwt: JWTService = Depends(get_jwt_service)):
     """Logout by revoking the refresh token (deny future refreshes) and invalidating the server session."""
     try:
-        claims, sess = await jwt.validate_refresh_and_get_session(payload.refresh_token)
+        claims = await jwt.validate(payload.refresh_token, expected_scope="refresh")
     except ValueError as e:
         # Treat invalid/unknown refresh as already logged out
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from e
+
+    sess = None
+    try:
+        _, sess = await jwt.validate_refresh_and_get_session(payload.refresh_token)
+    except ValueError:
+        sess = None
 
     # Revoke allow-list entry by jti and mark session inactive
     jti = claims.get("jti")
     if jti:
         await jwt.revoke_refresh(jti)
     try:
-        sess.invalidate()
+        if sess:
+            sess.invalidate()
     except Exception:
         # Best effort; even if session update fails, token is revoked
         pass
@@ -309,17 +316,25 @@ async def create_user(user: dict = Body(...)) -> User:
     # Resolve role: allow enum string like "ADMIN"/"STUDENT" or a raw UUID
     role_value = user.get("role")
     role_id: Optional[UUID] = None
+    role_name: Optional[str] = None
     if isinstance(role_value, str):
         try:
-            # Try enum name first
+            # Try enum name first (e.g. "ADMIN")
             enum_val = RoleEnum[role_value]
             role_id = await UserDAO().get_role_id(enum_val)
+            role_name = enum_val.value
         except Exception:
-            # Treat as raw UUID string if provided
             try:
-                role_id = UUID(role_value)
+                # Try enum value (e.g. "admin")
+                enum_val = RoleEnum(role_value)
+                role_id = await UserDAO().get_role_id(enum_val)
+                role_name = enum_val.value
             except Exception:
-                role_id = None
+                # Treat as raw UUID string if provided
+                try:
+                    role_id = UUID(role_value)
+                except Exception:
+                    role_id = None
 
     try:
         created_user = await UserDAO().create(
@@ -339,7 +354,7 @@ async def create_user(user: dict = Body(...)) -> User:
         nickname=created_user.nickname,
         email=created_user.email,
         is_active=created_user.is_active,
-        role=_role_name_from_model(created_user),
+        role=role_name,
         created_at=created_user.created_at,
         created_at_unix=int(created_user.created_at.timestamp()),
         updated_at=created_user.updated_at,

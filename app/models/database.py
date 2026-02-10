@@ -121,7 +121,11 @@ class Test(Base):
     number_of_required_questions: Mapped[int | None] = mapped_column(Integer, nullable=True)
     shuffle: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     navigation_method: Mapped[NavigationMethod] = mapped_column(
-        Enum(NavigationMethod, name="navigation_method_enum"),
+        Enum(
+            NavigationMethod,
+            name="navigation_method_enum",
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
         nullable=False,
         default=NavigationMethod.FREE,
     )

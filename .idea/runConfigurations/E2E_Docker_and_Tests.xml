@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="E2E (Docker + Tests)" type="CompoundRunConfigurationType" factoryName="Compound">
+    <toRun name="Run in Docker (detached)" type="docker-deploy" />
+    <toRun name="E2E tests" type="tests" />
+    <method v="2" />
+  </configuration>
+</component>
