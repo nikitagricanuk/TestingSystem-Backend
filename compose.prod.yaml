@@ -36,7 +36,6 @@ services:
   server:
     restart: always
     image: ghcr.io/${IMAGE_REPO}:${RELEASE_VERSION}
-    build: null
     ports:
       - "8000:8000"
     healthcheck:
@@ -68,7 +67,6 @@ services:
 
   migrate:
     image: ghcr.io/${IMAGE_REPO}:${RELEASE_VERSION}
-    build: null
     command: ["alembic", "upgrade", "head"]
     environment:
       - DB_NAME=${DB_NAME}
