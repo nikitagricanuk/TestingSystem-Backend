@@ -4,8 +4,43 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
+  precheck:
+    runs-on: ubuntu-latest
+    outputs:
+      run_e2e: ${{ steps.decision.outputs.run_e2e }}
+    steps:
+      - name: Decide whether to run e2e
+        id: decision
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.eventName === "pull_request") {
+              core.setOutput("run_e2e", "true");
+              return;
+            }
+            if (context.eventName !== "push") {
+              core.setOutput("run_e2e", "false");
+              return;
+            }
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.ref.replace("refs/heads/", "");
+            const { data: prs } = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: "open",
+              head: `${owner}:${branch}`,
+            });
+            core.setOutput("run_e2e", prs.length === 0 ? "true" : "false");
+
   e2e:
+    needs: precheck
+    if: needs.precheck.outputs.run_e2e == 'true'
     runs-on: ubuntu-latest
     env:
       DB_NAME: testing_system
@@ -26,7 +61,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest httpx
+          pip install pytest pytest-asyncio httpx
 
       - name: Start docker compose
         run: docker compose up -d --build
