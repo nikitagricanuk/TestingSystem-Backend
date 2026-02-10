@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models import Base
+import app.models.database  # register core models
+import app.repositories.question_bank.models  # register question bank models
 
 
 def _install_redis_stub():
