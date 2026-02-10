@@ -21,6 +21,10 @@ def _stub_passwords(monkeypatch):
         import app.utils.password as pw
         monkeypatch.setattr(pw, "verify_password", fake_verify, raising=False)
         monkeypatch.setattr(pw, "get_hashed_password", fake_hash, raising=False)
+        # Also patch any direct imports (e.g., routers that imported functions by name)
+        import app.services.auth.routers.auth as auth_router
+        monkeypatch.setattr(auth_router, "verify_password", fake_verify, raising=False)
+        monkeypatch.setattr(auth_router, "get_hashed_password", fake_hash, raising=False)
     except Exception:
         pass
 

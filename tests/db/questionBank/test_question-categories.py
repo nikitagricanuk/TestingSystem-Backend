@@ -234,3 +234,244 @@ async def test_question_crud(async_test_session):
     cat = await CategoryDAO.get(category.id, session=async_test_session)
     assert cat.id == category.id
     assert cat.category == "Algebra"
+
+
+@pytest.mark.asyncio
+async def test_get_by_teacher_returns_all_teacher_questions(async_test_session):
+    category = await CategoryDAO.create("Math", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+    other_teacher_id = uuid4()
+
+    for i in range(3):
+        question_data = {
+            "text": f"Question {i}",
+            "answer": {"correct": i},
+            "category_id": category.id,
+            "teacher_id": teacher_id,
+            "question_type": "text",
+            "problem": f"Problem {i}",
+            "mark_out_of": 5,
+            "penalty": 0,
+            "is_active": True,
+        }
+        await QuestionDAO.add_question(question_data, session=async_test_session)
+
+    question_data = {
+        "text": "Other teacher question",
+        "answer": {"correct": 1},
+        "category_id": category.id,
+        "teacher_id": other_teacher_id,
+        "question_type": "text",
+        "problem": "Problem",
+        "mark_out_of": 5,
+        "penalty": 0,
+        "is_active": True,
+    }
+    await QuestionDAO.add_question(question_data, session=async_test_session)
+    await async_test_session.commit()
+
+    questions = await QuestionDAO.get_by_teacher(teacher_id, session=async_test_session)
+
+    assert len(questions) == 3
+    for q in questions:
+        assert q.teacher_id == teacher_id
+
+
+@pytest.mark.asyncio
+async def test_get_by_teacher_returns_empty_for_no_questions(async_test_session):
+    teacher_id = uuid4()
+    questions = await QuestionDAO.get_by_teacher(teacher_id, session=async_test_session)
+    assert len(questions) == 0
+
+
+@pytest.mark.asyncio
+async def test_search_by_single_field(async_test_session):
+    category = await CategoryDAO.create("Physics", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+
+    for i in range(3):
+        question_data = {
+            "text": f"Question {i}",
+            "answer": {"correct": i},
+            "category_id": category.id,
+            "teacher_id": teacher_id,
+            "question_type": "text" if i < 2 else "multiple_choice",
+            "problem": f"Problem {i}",
+            "mark_out_of": 5,
+            "penalty": 0,
+            "is_active": True,
+        }
+        await QuestionDAO.add_question(question_data, session=async_test_session)
+
+    await async_test_session.commit()
+
+    questions = await QuestionDAO.search(session=async_test_session, question_type="text")
+
+    assert len(questions) == 2
+    for q in questions:
+        assert q.question_type.value == "text"
+
+
+@pytest.mark.asyncio
+async def test_search_by_multiple_fields(async_test_session):
+    category1 = await CategoryDAO.create("Math", session=async_test_session)
+    category2 = await CategoryDAO.create("Science", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+
+    question_data_1 = {
+        "text": "Math question",
+        "answer": {"correct": 1},
+        "category_id": category1.id,
+        "teacher_id": teacher_id,
+        "question_type": "text",
+        "problem": "Problem 1",
+        "mark_out_of": 10,
+        "penalty": 0,
+        "is_active": True,
+    }
+    await QuestionDAO.add_question(question_data_1, session=async_test_session)
+
+    question_data_2 = {
+        "text": "Science question",
+        "answer": {"correct": 2},
+        "category_id": category2.id,
+        "teacher_id": teacher_id,
+        "question_type": "text",
+        "problem": "Problem 2",
+        "mark_out_of": 10,
+        "penalty": 0,
+        "is_active": True,
+    }
+    await QuestionDAO.add_question(question_data_2, session=async_test_session)
+
+    question_data_3 = {
+        "text": "Math hard question",
+        "answer": {"correct": 3},
+        "category_id": category1.id,
+        "teacher_id": teacher_id,
+        "question_type": "text",
+        "problem": "Problem 3",
+        "mark_out_of": 5,
+        "penalty": 0,
+        "is_active": True,
+    }
+    await QuestionDAO.add_question(question_data_3, session=async_test_session)
+
+    await async_test_session.commit()
+
+    questions = await QuestionDAO.search(
+        session=async_test_session,
+        category_id=category1.id,
+        mark_out_of=10
+    )
+
+    assert len(questions) == 1
+    assert questions[0].category_id == category1.id
+    assert questions[0].mark_out_of == 10
+
+
+@pytest.mark.asyncio
+async def test_search_returns_empty_when_no_matches(async_test_session):
+    category = await CategoryDAO.create("History", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+
+    question_data = {
+        "text": "History question",
+        "answer": {"correct": 1},
+        "category_id": category.id,
+        "teacher_id": teacher_id,
+        "question_type": "text",
+        "problem": "Problem",
+        "mark_out_of": 5,
+        "penalty": 0,
+        "is_active": True,
+    }
+    await QuestionDAO.add_question(question_data, session=async_test_session)
+    await async_test_session.commit()
+
+    questions = await QuestionDAO.search(session=async_test_session, mark_out_of=100)
+
+    assert len(questions) == 0
+
+
+@pytest.mark.asyncio
+async def test_search_with_invalid_field_returns_all(async_test_session):
+    category = await CategoryDAO.create("Geography", session=async_test_session)
+    await async_test_session.commit()
+
+    teacher_id = uuid4()
+
+    question_data = {
+        "text": "Geography question",
+        "answer": {"correct": 1},
+        "category_id": category.id,
+        "teacher_id": teacher_id,
+        "question_type": "text",
+        "problem": "Problem",
+        "mark_out_of": 5,
+        "penalty": 0,
+        "is_active": True,
+    }
+    await QuestionDAO.add_question(question_data, session=async_test_session)
+    await async_test_session.commit()
+
+    questions = await QuestionDAO.search(session=async_test_session, invalid_field="value")
+
+    assert len(questions) == 1
+
+@pytest.mark.asyncio
+async def test_question_list_with_offset_limit(async_test_session):
+    category = await CategoryDAO.create("ListTest", session=async_test_session)
+    await async_test_session.commit()
+
+    for i in range(5):
+        await QuestionDAO.add_question({
+            "text": f"Q{i}",
+            "answer": {"correct": i},
+            "category_id": category.id,
+            "teacher_id": uuid4(),
+            "question_type": "text",
+            "problem": "Test",
+            "mark_out_of": 5,
+            "penalty": 0,
+            "is_active": True,
+        }, session=async_test_session)
+
+    await async_test_session.commit()
+
+    questions = await QuestionDAO.list(offset=1, limit=2, session=async_test_session)
+    assert len(questions) == 2
+
+@pytest.mark.asyncio
+async def test_list_by_category_no_descendants(async_test_session):
+    category = await CategoryDAO.create("Root", session=async_test_session)
+    await async_test_session.commit()
+
+    q = await QuestionDAO.add_question({
+        "text": "Root Q",
+        "answer": {"correct": 1},
+        "category_id": category.id,
+        "teacher_id": uuid4(),
+        "question_type": "text",
+        "problem": "Test",
+        "mark_out_of": 5,
+        "penalty": 0,
+        "is_active": True,
+    }, session=async_test_session)
+
+    await async_test_session.commit()
+
+    questions = await QuestionDAO.list_by_category(
+        category.id, include_descendants=False, session=async_test_session
+    )
+
+    assert len(questions) == 1
+    assert questions[0].id == q.id
