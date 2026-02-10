@@ -41,10 +41,10 @@ def load_questions_from_json() -> list[Question]:
 
 class QuestionBank:
     def __init__(self):
-        pass
+        self._questions: dict[UUID, Question] = {}
 
     async def add(self, question: Question):
-        pass
+        self._questions[question.id] = question
 
     @classmethod
     async def get(cls, qid: UUID) -> Question:
@@ -53,17 +53,30 @@ class QuestionBank:
         :param qid:
         :return:
         """
+        instance = get_qb()
+        cached = instance._questions.get(qid)
+        if cached:
+            return cached
         questions = load_questions_from_json()
+        for question in questions:
+            if question.id == qid:
+                return question
+        if not questions:
+            raise ValueError("No questions available")
         return questions[rint(0, len(questions)-1)]
 
     async def get_question(self, qid: UUID) -> Question:
         return await self.get(qid)
 
     async def update(self, question: Question):
-        pass
+        if question.id not in self._questions:
+            raise KeyError(f"Question {question.id} not found")
+        self._questions[question.id] = question
 
     async def delete(self, question: Question):
-        pass
+        if question.id not in self._questions:
+            raise KeyError(f"Question {question.id} not found")
+        del self._questions[question.id]
 
 question_bank = QuestionBank()
 
