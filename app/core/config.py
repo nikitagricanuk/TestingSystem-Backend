@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_user: str = 'userAR'
     redis_password: str = '123AR'
+    redis_om_url: str | None = None
 
     # Auth settings
     auth_session_expire_hours: int = 12
@@ -41,8 +42,17 @@ class Settings(BaseSettings):
             return cls.model_fields["db_port"].default
         return value
 
+    @field_validator("redis_om_url", mode="before")
+    @classmethod
+    def _coerce_redis_om_url(cls, value: str | None):
+        if value in (None, "", "None"):
+            return None
+        return value
+
     @property
     def get_redis_url(self) -> str:
+        if self.redis_om_url:
+            return self.redis_om_url
         return (
             f"redis://{self.redis_user}:{self.redis_password}"
             f"@{self.redis_host}:{self.redis_port}"
