@@ -26,6 +26,10 @@ COPY pyproject.toml poetry.lock* ./
 RUN poetry config virtualenvs.create false \
  && poetry install --no-interaction --no-ansi --no-root
 
+# Ensure migration scripts and config are present even if build context is filtered.
+COPY alembic.ini ./alembic.ini
+COPY migration ./migration
+
 # ---- Now copy the rest of your project
 COPY . .
 
