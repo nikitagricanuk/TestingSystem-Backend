@@ -36,6 +36,8 @@ services:
   server:
     restart: always
     image: ghcr.io/${IMAGE_REPO}:${RELEASE_VERSION}
+    volumes:
+      - "./migration:/app/migration:ro"
     ports:
       - "127.0.0.1:8001:8000"
     healthcheck:
@@ -68,6 +70,8 @@ services:
   migrate:
     image: ghcr.io/${IMAGE_REPO}:${RELEASE_VERSION}
     command: ["alembic", "upgrade", "head"]
+    volumes:
+      - "./migration:/app/migration:ro"
     environment:
       - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}

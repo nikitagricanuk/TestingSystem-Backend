@@ -119,7 +119,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USERNAME }}
           port: 22
           key: ${{ secrets.DEPLOY_KEY }}
-          source: "./compose.yaml,./compose.prod.yaml,./.env"
+          source: "./compose.yaml,./compose.prod.yaml,./.env,./migration"
           target: "~/.deploy/${{ github.event.repository.name }}/"
           overwrite: true
 
