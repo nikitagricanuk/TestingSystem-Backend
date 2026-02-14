@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from app.core.databases import async_session_maker
 from app.repositories.question_bank.exceptions import (
@@ -27,7 +27,10 @@ from app.schemas.question_bank import (
 )
 from app.schemas.users import UserFull
 from app.services.auth.routers.auth import get_current_user
-
+from app.utils.question_import import (
+    parse_questions_from_moodle_xml,
+    parse_questions_from_tex,
+)
 
 router = APIRouter()
 
@@ -299,3 +302,69 @@ async def delete_question(
             await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return _question_out(question)
+
+@router.post("/questions/import", response_model=list[QuestionOut], status_code=status.HTTP_201_CREATED)
+async def import_questions(
+    file: UploadFile = File(...),
+    category_id: UUID | None = Form(None),
+    category_path: str | None = Form(None),
+    current_user: UserFull = Depends(get_current_user),
+) -> list[QuestionOut]:
+    filename = (file.filename or "").lower()
+    raw_content = await file.read()
+
+    try:
+        content = raw_content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File must be utf-8 encoded") from exc
+
+    if filename.endswith(".tex"):
+        parsed_questions = parse_questions_from_tex(content)
+    elif filename.endswith(".xml"):
+        try:
+            parsed_questions = parse_questions_from_moodle_xml(content)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid XML format") from exc
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Supported file types are .tex and .xml")
+
+    if not parsed_questions:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No questions found in file")
+
+    parsed_path = [part.strip() for part in category_path.split("/") if part.strip()] if category_path else None
+
+    async with async_session_maker() as session:
+        resolved_category_id = category_id
+        if resolved_category_id is None and parsed_path:
+            try:
+                category = await CategoryDAO.get_or_create_path(parsed_path, session=session)
+            except CategoryCreateError as exc:
+                await session.rollback()
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            resolved_category_id = category.id
+
+        if resolved_category_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="category_id or category_path is required")
+
+        created = []
+        try:
+            for parsed in parsed_questions:
+                payload = {
+                    "text": parsed.text,
+                    "answer": parsed.answer,
+                    "question_type": parsed.question_type,
+                    "problem": parsed.problem,
+                    "mark_out_of": parsed.mark_out_of,
+                    "penalty": parsed.penalty,
+                    "is_active": parsed.is_active,
+                    "category_id": resolved_category_id,
+                    "teacher_id": current_user.id,
+                }
+                question = await QuestionDAO.add_question(payload, session=session)
+                created.append(question)
+            await session.commit()
+        except QuestionCreateError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return [_question_out(question) for question in created]

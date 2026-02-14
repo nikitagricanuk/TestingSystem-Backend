@@ -348,3 +348,72 @@ def test_delete_question_success(client: TestClient, patch_session_maker, patch_
     body = res.json()
     assert body["id"] == str(question_id)
     assert patch_daos["deleted_question_id"] == question_id
+
+
+def test_import_questions_from_tex(client: TestClient, patch_session_maker, patch_daos, override_user):
+    category = SimpleNamespace(id=uuid4(), category="Math", parent_id=None)
+    patch_daos["category_by_path"] = category
+
+    tex_content = r"""
+\documentclass[12pt]{article}
+\usepackage[english, russian]{babel}
+\usepackage{graphicx}
+\usepackage{moodle}
+
+\begin{document}
+\begin{quiz}{T6.Ряды проф. Власова}%%
+\begin{multi}{T6}
+Ряд $\displaystyle\sum_{n=1}^\infty a_n$ называют сходящимся только тогда, когда его сумма равна
+\item* верный ответ отсутствует
+\item 1
+\item $e$
+\item $\pi$
+\item $\infty$
+\end{multi}
+\end{quiz}
+\end{document}
+    """
+
+    res = client.post(
+        "/v1/questions/import",
+        files={"file": ("questions.tex", tex_content, "application/x-tex")},
+        data={"category_path": "Math/Series"},
+    )
+
+    assert res.status_code == 201
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["text"] == "Ряд $\\displaystyle\\sum_{n=1}^\\infty a_n$ называют сходящимся только тогда, когда его сумма равна"
+    assert body[0]["answer"]["correct"] == ["верный ответ отсутствует"]
+    assert body[0]["answer"]["options"] == [
+        "верный ответ отсутствует",
+        "1",
+        "$e$",
+        "$\\pi$",
+        "$\\infty$",
+    ]
+
+
+def test_import_questions_from_xml(client: TestClient, patch_session_maker, patch_daos, override_user):
+    category_id = uuid4()
+    xml_content = """
+    <quiz>
+      <question type="multichoice">
+        <questiontext format="html"><text>2+2=?</text></questiontext>
+        <answer fraction="100"><text>4</text></answer>
+        <answer fraction="0"><text>5</text></answer>
+      </question>
+    </quiz>
+    """
+
+    res = client.post(
+        "/v1/questions/import",
+        files={"file": ("questions.xml", xml_content, "application/xml")},
+        data={"category_id": str(category_id)},
+    )
+
+    assert res.status_code == 201
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["text"] == "2+2=?"
+    assert body[0]["answer"]["correct"] == ["4"]
