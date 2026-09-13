@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # deployment moves beyond one server.
     certificate_storage_path: str = "data/certificates"
 
+    # Comma-separated list of origins allowed to call the API from a browser
+    # (the frontend's Vite dev server by default; override in prod).
+    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @property
+    def get_cors_allowed_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
     @field_validator("db_host", "db_name", "db_user", "db_password", mode="before")
     @classmethod
     def _default_if_none(cls, value: str | None, info):

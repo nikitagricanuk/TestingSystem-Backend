@@ -53,14 +53,6 @@ class JWTService:
         self._token_store_factory = token_store_factory
         self.token_prefix = token_prefix
 
-    def _get_token_store(self) -> Optional[Any]:
-        if self.token_store is None and self._token_store_factory is not None:
-            try:
-                self.token_store = self._token_store_factory()
-            except Exception:
-                return None
-        return self.token_store
-
         # Accept either JWKs **or** raw secrets; derive keys if secrets are provided.
         if access_jwk and refresh_jwk:
             self.access_jwk = access_jwk
@@ -70,6 +62,14 @@ class JWTService:
             self.refresh_jwk = jwk.JWK.from_password(refresh_secret)
         else:
             raise ValueError("Provide either (access_jwk & refresh_jwk) or (access_secret & refresh_secret)")
+
+    def _get_token_store(self) -> Optional[Any]:
+        if self.token_store is None and self._token_store_factory is not None:
+            try:
+                self.token_store = self._token_store_factory()
+            except Exception:
+                return None
+        return self.token_store
 
     async def create(
             self,

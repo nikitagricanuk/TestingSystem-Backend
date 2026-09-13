@@ -132,7 +132,7 @@ class FakeJWT:
     async def validate_refresh_and_get_session(self, refresh_token: str):
         if refresh_token == "bad_refresh":
             raise ValueError("bad refresh")
-        claims = {"jti": "some-jti"}
+        claims = {"jti": "some-jti", "sub": self._user_id, "scope": "refresh"}
         # minimal session object with invalidate()
         sess = SimpleNamespace(invalidate=lambda: None)
         return claims, sess
@@ -305,6 +305,30 @@ def test_logout_invalid_refresh_401(client: TestClient, jwt_override, monkeypatc
     monkeypatch.setattr(fake_jwt, "validate_refresh_and_get_session", bad_validate_refresh_and_get_session, raising=False)
 
     res = client.post("/v1/auth/logout", json={"refresh_token": "bad_refresh"})
+    assert res.status_code == 401
+    assert res.json()["detail"] == "bad refresh"
+
+
+def test_refresh_success(client: TestClient, jwt_override):
+    fake_jwt, user_id = jwt_override
+    res = client.post("/v1/auth/refresh", json={"refresh_token": "refresh.jwt.token"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["access_token"] == "access.jwt.token"
+    assert body["refresh_token"] == "refresh.jwt.token"
+    # old refresh token must be rotated out
+    assert fake_jwt.revoked == ["some-jti"]
+
+
+def test_refresh_invalid_401(client: TestClient, jwt_override, monkeypatch):
+    fake_jwt, _ = jwt_override
+
+    async def bad_validate_refresh_and_get_session(refresh_token: str):
+        raise ValueError("bad refresh")
+
+    monkeypatch.setattr(fake_jwt, "validate_refresh_and_get_session", bad_validate_refresh_and_get_session, raising=False)
+
+    res = client.post("/v1/auth/refresh", json={"refresh_token": "bad_refresh"})
     assert res.status_code == 401
     assert res.json()["detail"] == "bad refresh"
 

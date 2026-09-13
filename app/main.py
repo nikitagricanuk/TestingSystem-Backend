@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from .core.config import settings
 from .routers import results, health, question_bank, tests, geo, admin, admissions, certificates
 from .services.testing_engine.routers import sessions
 from .services.auth.routers import auth
@@ -6,6 +8,13 @@ from .services.auth.routers import auth
 
 def create_app() -> FastAPI:
     app = FastAPI(title='Student Testing System API', version='1.0.0')
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.get_cors_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     # Example global dependency:
     # app.dependency_overrides[get_token_header] = lambda: None
     app.include_router(health.router, prefix="", tags=['health'])

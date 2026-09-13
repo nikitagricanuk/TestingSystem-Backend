@@ -130,7 +130,7 @@ async def upload_certificate_signature(
 async def delete_certificate_template(
     template_id: UUID,
     current_user: UserFull = Depends(require_permissions(Permissions.Certificates.UPDATE)),
-) -> None:
+):
     deleted = await CertificateTemplateDAO.delete(template_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")

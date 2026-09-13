@@ -345,7 +345,7 @@ async def delete_test_question_rule(
     test_id: UUID,
     rule_id: UUID,
     current_user: UserFull = Depends(get_current_user),
-) -> None:
+):
     rules = await TestDAO.list_rules(test_id)
     rule = next((r for r in rules if r.id == rule_id), None)
     if rule is None:

@@ -11,6 +11,9 @@ dependencies = [
     "sqlalchemy (>=2.0.42,<3.0.0)",
     "uvicorn[standard] (>=0.37.0,<0.38.0)",
     "redis-om (>=0.3.5,<0.4.0)",
+    # redis-om 0.3.5's HashModel `pk` auto-field breaks under pydantic >=2.12
+    # ("pk: Input should be a valid string" on every construction) — pin below that.
+    "pydantic (>=2.9,<2.12)",
     "pydantic-settings (>=2.11.0,<3.0.0)",
     "alembic (>=1.16.4,<2.0.0)",
     "asyncpg (>=0.30.0,<0.31.0)",

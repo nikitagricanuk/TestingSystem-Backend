@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime, timedelta
 
+from pydantic import field_serializer
+
 from app.core.config import settings
 from app.core.databases import init_redis_connection
 from redis_om import HashModel, Field
@@ -17,16 +19,22 @@ def get_redis():
 
 
 class Session(HashModel):
-    sid: uuid.UUID = Field(index=True, default_factory=uuid.uuid4)
+    sid: uuid.UUID = Field(index=True, default_factory=uuid.uuid4, primary_key=True)
     user_id: str
     ip_address: str
     user_agent: str | None = None  # browser / device info
     refresh_token: str | None = Field(index=True, default=None)  # if you use refresh cycles
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=get_current_time)
     expires_at: datetime = Field(
-        default_factory=lambda: datetime.utcnow() + timedelta(hours=settings.auth_session_expire_hours))
+        default_factory=lambda: get_current_time() + timedelta(hours=settings.auth_session_expire_hours))
     last_active: datetime | None = None  # for session timeout logic
     is_active: bool = True  # quick flag for logout / invalidation
+
+    @field_serializer("is_active")
+    def _serialize_is_active(self, value: bool) -> int:
+        # redis-py/hiredis's HSET packer rejects bare Python bool values
+        # (`type(x) is bool` fails its str/int/float/bytes check); store as 0/1.
+        return int(value)
 
     class Meta:
         database = None  # set lazily to avoid import-time connection

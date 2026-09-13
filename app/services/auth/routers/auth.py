@@ -255,6 +255,45 @@ async def create_guest_session(
     )
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@router.post("/refresh", response_model=LoginResponse)
+async def refresh_tokens(payload: RefreshRequest, request: Request,
+                          jwt: JWTService = Depends(get_jwt_service)) -> LoginResponse:
+    """Exchange a valid refresh token for a new access/refresh pair (rotation)."""
+    try:
+        claims, session = await jwt.validate_refresh_and_get_session(payload.refresh_token)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from e
+
+    user_id = claims.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+
+    # Rotate: the old refresh token/session must not be usable again once a new pair is issued.
+    jti = claims.get("jti")
+    if jti:
+        await jwt.revoke_refresh(jti)
+    try:
+        session.invalidate()
+    except Exception:
+        pass
+
+    pair = await jwt.create(subject=user_id, session_ip=request.client.host)
+
+    return LoginResponse(
+        access_token=pair.access_token,
+        refresh_token=pair.refresh_token,
+        token_type="bearer",
+        access_token_expires_at=pair.access_token_expires_at.isoformat(),
+        access_token_expires_at_unix=int(pair.access_token_expires_at.timestamp()),
+        refresh_token_expires_at=pair.refresh_token_expires_at.isoformat(),
+        refresh_token_expires_at_unix=int(pair.refresh_token_expires_at.timestamp())
+    )
+
+
 class LogoutRequest(BaseModel):
     refresh_token: str
 
