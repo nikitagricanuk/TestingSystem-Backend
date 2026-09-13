@@ -89,7 +89,9 @@ class TestSession:
         assert session.answers == json.dumps({})
 
     async def test_answer_current_question_updates_counters(self):
-        """First answer to a question should update counters and pointer, second should not."""
+        """First answer to a question should update counters (not the pointer — advancing
+        is /next's/prev's job, so the student can change their mind before navigating on),
+        second answer to the same question should not change the counters again."""
 
         qb = DummyQuestionBank()
         question_ids = [uuid.uuid4() for _ in range(3)]
@@ -119,7 +121,7 @@ class TestSession:
         assert answers == {"0": "A"}
         assert session.questions_answered == 1
         assert session.questions_remaining == len(question_ids) - 1
-        assert session.current_question_index == 1
+        assert session.current_question_index == 0
         assert session.saved is True
 
         # Second answer to the same question should not change counters
@@ -130,8 +132,7 @@ class TestSession:
         assert answers2 == {"0": "B"}
         assert session.questions_answered == 1
         assert session.questions_remaining == len(question_ids) - 1
-        # pointer still moves relative to provided question_index
-        assert session.current_question_index == 1
+        assert session.current_question_index == 0
         assert session.saved is True
 
     async def test_get_current_question_uses_question_bank(self, monkeypatch):

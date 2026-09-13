@@ -64,6 +64,11 @@ def _question_status(answers: dict[str, str], index: int) -> str:
     return "answered" if str(index) in answers else "unanswered"
 
 
+def _question_type(question: object) -> str | None:
+    value = getattr(question, "question_type", None)
+    return value if isinstance(value, str) else None
+
+
 def _is_linear(session_service: SessionService) -> bool:
     return getattr(session_service.session, "navigation_method", "free") == NavigationMethod.LINEAR.value
 
@@ -157,7 +162,9 @@ async def get_tests_session_session_id_question_list(
         questions.append(
             SessionQuestion(
                 index=index,
+                question_id=question_id,
                 question=_question_text(question),
+                question_type=_question_type(question),
                 choices=_question_choices(question),
                 status=_question_status(answers, index),
             )
@@ -192,7 +199,9 @@ async def get_tests_session_session_id_question_next(
     answers = json.loads(session_service.session.answers or "{}")
     return SessionQuestion(
         index=next_index,
+        question_id=question_ids[next_index],
         question=_question_text(question),
+        question_type=_question_type(question),
         choices=_question_choices(question),
         status=_question_status(answers, next_index),
     )
@@ -229,7 +238,9 @@ async def get_tests_session_session_id_question_prev(
     answers = json.loads(session_service.session.answers or "{}")
     return SessionQuestion(
         index=prev_index,
+        question_id=getattr(question, "question_id", None),
         question=_question_text(question),
+        question_type=_question_type(question),
         choices=_question_choices(question),
         status=_question_status(answers, prev_index),
     )
@@ -262,7 +273,9 @@ async def get_tests_session_session_id_question_question_id(
     answers = json.loads(session_service.session.answers or "{}")
     return SessionQuestion(
         index=index,
+        question_id=question_id,
         question=_question_text(question),
+        question_type=_question_type(question),
         choices=_question_choices(question),
         status=_question_status(answers, index),
     )

@@ -176,8 +176,11 @@ class SessionService:
         now = datetime.now(timezone.utc)
         self.accumulate_time_for_question(question_index, now)
 
-        # Move pointer to the next question after this one
-        session.current_question_index = question_index + 1
+        # Answering does NOT move current_question_index — advancing is the sole
+        # responsibility of /next, /prev and /question/{id} (see the sessions
+        # router). A student can pick an answer, change their mind, and only
+        # move on when they explicitly navigate; auto-advancing here would also
+        # push the pointer out of bounds when answering the last question.
         session.last_activity = now
         session.answers = json.dumps(answers_dict)
 
@@ -264,6 +267,7 @@ class SessionService:
             ip_address=self.session.ip_address,
             device_type=getattr(self.session, "device_type", None),
             last_activity_unix=int(self.session.last_activity.replace(tzinfo=timezone.utc).timestamp()),
+            answers=json.loads(self.session.answers or "{}"),
         )
 
     def is_required_complete(self) -> bool:

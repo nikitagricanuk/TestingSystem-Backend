@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Dict
 
 class Session(BaseModel):
     sid: Optional[UUID] = Field(None)
@@ -26,6 +26,10 @@ class Session(BaseModel):
     ip_address: Optional[str] = Field(None)
     device_type: Optional[str] = Field(None)
     last_activity_unix: Optional[int] = Field(None)
+    # Keyed by question index (as a string), matching how answers are stored
+    # internally — lets the UI restore a previously-picked choice when a
+    # student navigates back to a question they've already answered.
+    answers: Optional[Dict[str, str]] = Field(None)
 
 class SessionDelete(BaseModel):
     sid: Optional[UUID] = Field(None)
@@ -34,6 +38,8 @@ class SessionDelete(BaseModel):
 
 class SessionQuestion(BaseModel):
     index: Optional[int] = Field(None)
+    question_id: Optional[UUID] = Field(None)
     question: Optional[str] = Field(None)
+    question_type: Optional[str] = Field(None)
     choices: Optional[list[str]] = Field(None)
     status: Optional[str] = Field(None)

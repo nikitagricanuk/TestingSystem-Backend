@@ -265,8 +265,8 @@ def test_question_list_returns_statuses(client: TestClient, override_user, monke
     )
     qb = FakeQuestionBank(
         {
-            question_ids[0]: SimpleNamespace(content="Q1"),
-            question_ids[1]: SimpleNamespace(content="Q2"),
+            question_ids[0]: SimpleNamespace(content="Q1", question_type="single"),
+            question_ids[1]: SimpleNamespace(content="Q2", question_type="multiple"),
         }
     )
     _patch_question_redis(monkeypatch, qb.mapping)
@@ -284,6 +284,13 @@ def test_question_list_returns_statuses(client: TestClient, override_user, monke
     assert body[0]["index"] == 0
     assert body[0]["status"] == "answered"
     assert body[1]["status"] == "unanswered"
+    # question_id/question_type must round-trip — the frontend needs question_id
+    # to submit an answer and question_type to know whether to render radio
+    # buttons, checkboxes, or a free-text field.
+    assert body[0]["question_id"] == str(question_ids[0])
+    assert body[0]["question_type"] == "single"
+    assert body[1]["question_id"] == str(question_ids[1])
+    assert body[1]["question_type"] == "multiple"
 
 
 def test_get_question_by_id_returns_question(client: TestClient, override_user, monkeypatch):
