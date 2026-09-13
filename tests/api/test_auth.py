@@ -241,6 +241,16 @@ def test_login_invalid_credentials_401(client: TestClient, patch_userdao, jwt_ov
     assert res.json()["detail"] == "Invalid credentials"
 
 
+def test_guest_session_issues_tokens(client: TestClient, patch_userdao, jwt_override):
+    res = client.post("/v1/auth/guest")
+
+    assert res.status_code == 201
+    body = res.json()
+    assert body["token_type"] == "bearer"
+    assert "access_token" in body and body["access_token"]
+    assert "refresh_token" in body and body["refresh_token"]
+
+
 def test_me_unauthorized_401(client: TestClient):
     res = client.get("/v1/auth/users/me")
     assert res.status_code in (401, 403)

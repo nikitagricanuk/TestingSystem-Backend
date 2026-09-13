@@ -49,6 +49,15 @@ class TestSession:
         # Make SessionService.create use our in‑memory FakeSession instead of Redis model
         monkeypatch.setattr(session_service, "Session", FakeSession)
 
+        # Snapshotting hits Postgres/Redis for real; irrelevant to what this test
+        # verifies (Session construction/save), so make it a no-op.
+        async def fake_snapshot(question_ids):
+            return None
+
+        monkeypatch.setattr(
+            session_service.QuestionSnapshotService, "snapshot_for_session", staticmethod(fake_snapshot)
+        )
+
         qb = DummyQuestionBank()
         user_id = uuid.uuid4()
         test_id = uuid.uuid4()
@@ -125,11 +134,19 @@ class TestSession:
         assert session.current_question_index == 1
         assert session.saved is True
 
-    async def test_get_current_question_uses_question_bank(self):
-        """get_current_question should ask QuestionBank for the UUID matching current index."""
+    async def test_get_current_question_uses_question_bank(self, monkeypatch):
+        """get_current_question should fetch the QuestionRedis snapshot for the
+        UUID at the session's current index (not the legacy qb mock)."""
 
         qb = DummyQuestionBank()
         question_ids = [uuid.uuid4() for _ in range(3)]
+        requested: list[uuid.UUID] = []
+
+        async def fake_get(question_id):
+            requested.append(question_id)
+            return f"question-{question_id}"
+
+        monkeypatch.setattr(session_service.QuestionRedis, "get", staticmethod(fake_get))
 
         session = FakeSession(
             sid=str(uuid.uuid4()),
@@ -150,16 +167,23 @@ class TestSession:
         service = SessionService(session, qb)
         result = await service.get_current_question()
 
-        assert qb.requested_questions  # at least one call
-        assert qb.requested_questions[0] == question_ids[1]
+        assert requested  # at least one call
+        assert requested[0] == question_ids[1]
         assert result == f"question-{question_ids[1]}"
 
-    async def test_next_and_prev_question_update_index_and_last_activity(self):
+    async def test_next_and_prev_question_update_index_and_last_activity(self, monkeypatch):
         """next_question/prev_question should move the pointer and touch last_activity."""
 
         qb = DummyQuestionBank()
         question_ids = [uuid.uuid4() for _ in range(2)]
         now = datetime.now(timezone.utc)
+        requested: list[uuid.UUID] = []
+
+        async def fake_get(question_id):
+            requested.append(question_id)
+            return f"question-{question_id}"
+
+        monkeypatch.setattr(session_service.QuestionRedis, "get", staticmethod(fake_get))
 
         session = FakeSession(
             sid=str(uuid.uuid4()),
@@ -184,14 +208,14 @@ class TestSession:
 
         assert session.current_question_index == 1
         assert session.last_activity >= old_last_activity
-        assert qb.requested_questions[-1] == question_ids[1]
+        assert requested[-1] == question_ids[1]
 
         before_prev_last_activity = session.last_activity
         await service.prev_question()
 
         assert session.current_question_index == 0
         assert session.last_activity >= before_prev_last_activity
-        assert qb.requested_questions[-1] == question_ids[0]
+        assert requested[-1] == question_ids[0]
 
     async def test_finish_computes_score_and_sets_finished_status(self, monkeypatch):
         """finish() should compute percent score and update status/time fields.
@@ -227,7 +251,9 @@ class TestSession:
         async def fake_get(question_id):
             # Map question UUID to its index and correct answer
             idx = question_ids.index(question_id)
-            return SimpleNamespace(index=idx, correct_answer=correct_answers[idx])
+            return SimpleNamespace(
+                question_id=question_id, index=idx, correct_answer=correct_answers[idx], question_type="single"
+            )
 
         # Patch QuestionRedis.get to avoid talking to real Redis for questions
         monkeypatch.setattr(session_service.QuestionRedis, "get", staticmethod(fake_get))
@@ -241,6 +267,55 @@ class TestSession:
         assert 0 <= session.duration <= 120
         assert session.score == 50.0
         assert session.saved is True
+
+    async def test_finish_scores_multiple_choice_and_string_indexed_questions(self, monkeypatch):
+        """Real QuestionRedis.index is a str field; finish() must still match answers
+        keyed by string index, and must grade "multiple"-type questions as a set
+        rather than exact string equality.
+        """
+
+        qb = DummyQuestionBank()
+        question_ids = [uuid.uuid4(), uuid.uuid4()]
+
+        session = FakeSession(
+            sid=str(uuid.uuid4()),
+            test_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            question_ids=json.dumps([str(q) for q in question_ids]),
+            questions_remaining=0,
+            indefinite_questions=False,
+            ip_address="127.0.0.1",
+            # Question 0: multi-select, submitted in a different order but same set -> correct.
+            # Question 1: multi-select, missing one of the correct choices -> incorrect.
+            answers=json.dumps({"0": json.dumps(["2", "0"]), "1": json.dumps(["0"])}),
+            questions_answered=2,
+            current_question_index=2,
+            status=SessionStatus.ACTIVE,
+            time_start=datetime.now(timezone.utc) - timedelta(seconds=60),
+            last_activity=datetime.now(timezone.utc),
+            time_finish=None,
+            duration=None,
+            score=None,
+        )
+
+        by_id = {
+            question_ids[0]: SimpleNamespace(
+                question_id=question_ids[0], index="0", correct_answer=json.dumps(["0", "2"]), question_type="multiple"
+            ),
+            question_ids[1]: SimpleNamespace(
+                question_id=question_ids[1], index="1", correct_answer=json.dumps(["0", "1"]), question_type="multiple"
+            ),
+        }
+
+        async def fake_get(question_id):
+            return by_id[question_id]
+
+        monkeypatch.setattr(session_service.QuestionRedis, "get", staticmethod(fake_get))
+
+        service = SessionService(session, qb)
+        await service.finish()
+
+        assert session.score == 50.0
 
     async def test_close_sets_closed_status_and_duration(self):
         """close() should mark session as CLOSED and set finish/duration."""

@@ -90,6 +90,7 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./scripts:/import/scripts:ro
+      - ./data:/import/data:ro
     environment:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}

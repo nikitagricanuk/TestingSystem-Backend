@@ -67,48 +67,63 @@ def _question_type_matches(question, expected: str) -> bool:
 
 @router.get("/categories", response_model=list[CategoryOut])
 async def list_categories(
+    current_user: UserFull = Depends(get_current_user),
     offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
 ) -> list[CategoryOut]:
-    categories = await CategoryDAO.list(offset=offset, limit=limit)
+    categories = await CategoryDAO.list(owner_id=current_user.id, offset=offset, limit=limit)
     return [_category_out(category) for category in categories]
 
 
 @router.get("/categories/{category_id}", response_model=CategoryOut)
-async def get_category(category_id: UUID) -> CategoryOut:
+async def get_category(
+    category_id: UUID,
+    current_user: UserFull = Depends(get_current_user),
+) -> CategoryOut:
     try:
         category = await CategoryDAO.get(category_id)
     except CategoryNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if category.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Category not available")
     return _category_out(category)
 
 
 @router.post("/categories", response_model=CategoryOut, status_code=status.HTTP_201_CREATED)
-async def create_category(payload: CategoryCreate) -> CategoryOut:
+async def create_category(
+    payload: CategoryCreate,
+    current_user: UserFull = Depends(get_current_user),
+) -> CategoryOut:
     async with async_session_maker() as session:
         try:
-            category = await CategoryDAO.create(payload.name, session=session)
-            if payload.parent_id is not None:
-                category = await CategoryDAO.update(
-                    category.id,
-                    parent_id=payload.parent_id,
-                    session=session,
-                )
+            category = await CategoryDAO.create(
+                payload.name,
+                owner_id=current_user.id,
+                parent_id=payload.parent_id,
+                session=session,
+            )
             await session.commit()
         except CategoryCreateError as exc:
-            await session.rollback()
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        except CategoryUpdateError as exc:
             await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return _category_out(category)
 
 
 @router.patch("/categories/{category_id}", response_model=CategoryOut)
-async def update_category(category_id: UUID, payload: CategoryUpdate) -> CategoryOut:
+async def update_category(
+    category_id: UUID,
+    payload: CategoryUpdate,
+    current_user: UserFull = Depends(get_current_user),
+) -> CategoryOut:
     if payload.name is None and payload.parent_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updatable fields provided")
     async with async_session_maker() as session:
+        try:
+            existing = await CategoryDAO.get(category_id, session=session)
+        except CategoryNotFound as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        if existing.owner_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Category not available")
         try:
             category = await CategoryDAO.update(
                 category_id,
@@ -127,10 +142,18 @@ async def update_category(category_id: UUID, payload: CategoryUpdate) -> Categor
 
 
 @router.delete("/categories/{category_id}", response_model=CategoryOut)
-async def delete_category(category_id: UUID) -> CategoryOut:
+async def delete_category(
+    category_id: UUID,
+    current_user: UserFull = Depends(get_current_user),
+) -> CategoryOut:
     async with async_session_maker() as session:
         try:
             category = await CategoryDAO.get(category_id, session=session)
+        except CategoryNotFound as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        if category.owner_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Category not available")
+        try:
             await CategoryDAO.delete(category_id, session=session)
             await session.commit()
         except CategoryNotFound as exc:
@@ -158,7 +181,7 @@ async def list_questions(
     category_filter_id = category_id
     if category_filter_id is None and category_path:
         try:
-            category = await CategoryDAO.get_by_path(category_path)
+            category = await CategoryDAO.get_by_path(category_path, owner_id=current_user.id)
         except CategoryNotFound as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         category_filter_id = category.id
@@ -226,7 +249,9 @@ async def create_question(
     async with async_session_maker() as session:
         if category_id is None and category_path:
             try:
-                category = await CategoryDAO.get_or_create_path(category_path, session=session)
+                category = await CategoryDAO.get_or_create_path(
+                    category_path, owner_id=current_user.id, session=session
+                )
             except CategoryCreateError as exc:
                 await session.rollback()
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -258,7 +283,9 @@ async def update_question(
             category_path = data.pop("category_path")
             if category_path:
                 try:
-                    category = await CategoryDAO.get_or_create_path(category_path, session=session)
+                    category = await CategoryDAO.get_or_create_path(
+                        category_path, owner_id=current_user.id, session=session
+                    )
                 except CategoryCreateError as exc:
                     await session.rollback()
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

@@ -19,6 +19,8 @@ class Session(BaseModel):
     questions_remaining: Optional[int] = Field(None)
     current_question_index: Optional[int] = Field(None)
     status: Optional[str] = Field(None)
+    required_count: Optional[int] = Field(None)
+    required_complete: Optional[bool] = Field(None)
     is_submitted: Optional[bool] = Field(None)
     score: Optional[float] = Field(None)
     ip_address: Optional[str] = Field(None)
@@ -33,4 +35,5 @@ class SessionDelete(BaseModel):
 class SessionQuestion(BaseModel):
     index: Optional[int] = Field(None)
     question: Optional[str] = Field(None)
+    choices: Optional[list[str]] = Field(None)
     status: Optional[str] = Field(None)

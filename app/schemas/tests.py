@@ -54,3 +54,17 @@ class TestDelete(BaseModel):
 class TestQuestionOut(BaseModel):
     question_id: UUID
     position_in_test: int
+
+
+class TestQuestionRuleCreate(BaseModel):
+    category_id: UUID
+    is_mandatory: bool = True
+    fixed_position: int | None = None
+
+
+class TestQuestionRuleOut(BaseModel):
+    id: UUID
+    test_id: UUID
+    category_id: UUID
+    is_mandatory: bool
+    fixed_position: int | None = None

@@ -54,9 +54,51 @@ class Result(BaseModel):
     group_scores: List[GroupScore] = []
 
 
+class QuestionAnalysisOut(BaseModel):
+    question_id: UUID
+    category: str
+    question_type: str
+    attempts: int
+    difficulty: float
+    discrimination: float
+    guess_score: float
+    effective_discrimination: float
+    std_dev: float
+    intended_weight: float
+    effective_weight: float
+
+
+class TestAnalysisOut(BaseModel):
+    test_id: UUID
+    avg_discrimination: float
+    avg_difficulty: float
+    avg_attempts: float
+    avg_effective_weight: float
+    questions: List[QuestionAnalysisOut] = []
+
+
+class SessionReviewQuestion(BaseModel):
+    index: int
+    prompt: Optional[str] = None
+    choices: List[str] = []
+    correct_answer: Optional[str] = None
+    student_answer: Optional[str] = None
+    is_correct: bool
+    time_spent_seconds: float = 0
+
+
+class SessionReview(BaseModel):
+    sid: UUID
+    test_id: UUID
+    user_id: UUID
+    score: Optional[float] = None
+    questions: List[SessionReviewQuestion] = []
+
+
 class LeaderboardEntry(BaseModel):
     rank: int
     nickname: str
+    school: Optional[str] = None
     score: float
     test_id: UUID
     group_scores: List[GroupScore] = []

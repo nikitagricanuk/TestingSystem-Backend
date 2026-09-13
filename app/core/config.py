@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     auth_jwt_issuer: str = "testing-system-api"
     auth_jwt_audience: str = "testing-system-spa"
 
+    # Local filesystem directory for uploaded certificate templates/signatures.
+    # A single-node MVP; swap for object storage (S3-compatible) if/when the
+    # deployment moves beyond one server.
+    certificate_storage_path: str = "data/certificates"
+
     @field_validator("db_host", "db_name", "db_user", "db_password", mode="before")
     @classmethod
     def _default_if_none(cls, value: str | None, info):

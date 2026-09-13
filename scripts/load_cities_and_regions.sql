@@ -1,3 +1,7 @@
+-- One-time seed for regions/settlements. Run after `docker compose up -d db`:
+--   docker compose exec db psql -U "$DB_USER" -d "$DB_NAME" -f /import/scripts/load_cities_and_regions.sql
+-- Requires the db service to also mount ./data:/import/data:ro (see compose.yaml).
+
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- 0) Make sure the unique constraints exist (use indexes with IF NOT EXISTS)

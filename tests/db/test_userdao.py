@@ -286,3 +286,16 @@ class TestUserDAO:
             user.id, "totally_unknown_permission", session=test_session
         )
         assert has_perm is False
+
+    async def test_get_role_id_resolves_teacher_and_admissions_committee(self, test_session):
+        teacher_role = Role(id=uuid.uuid4(), role="teacher")
+        admissions_role = Role(id=uuid.uuid4(), role="admissions_committee")
+        test_session.add_all([teacher_role, admissions_role])
+        await test_session.commit()
+
+        dao = UserDAO()
+        teacher_id = await dao.get_role_id(RoleEnum.TEACHER, session=test_session)
+        admissions_id = await dao.get_role_id(RoleEnum.ADMISSIONS_COMMITTEE, session=test_session)
+
+        assert teacher_id == teacher_role.id
+        assert admissions_id == admissions_role.id

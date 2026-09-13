@@ -1,18 +1,46 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from enum import Enum
 import json
 from uuid import UUID
 
 from aredis_om import NotFoundError
 from aredis_om.model.model import QueryNotSupportedError
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.schemas.results import Result, LeaderboardEntry, GroupScore
-from app.services.auth.routers.auth import get_current_user
+from app.schemas.results import (
+    Result,
+    LeaderboardEntry,
+    GroupScore,
+    SessionReview,
+    SessionReviewQuestion,
+    QuestionAnalysisOut,
+    TestAnalysisOut,
+)
+from app.services.auth.routers.auth import get_current_user, require_permissions
+from app.core.permissions import Permissions
 from app.schemas.users import UserFull
 from app.services.testing_engine.models.redis import Session as SessionModel, SessionStatus, QuestionRedis
+from app.services.testing_engine.grading import is_correct_answer
+from app.services.testing_engine.item_analysis import AttemptRecord, compute_question_stats, compute_weights
 from app.repositories.dao.userdao import UserDAO
+from app.repositories.dao.geodao import SettlementDAO
+from app.repositories.dao.testdao import TestDAO
 
 router = APIRouter()
+
+
+class RatingScope(str, Enum):
+    GLOBAL = "global"
+    REGION = "region"
+    CITY = "city"
+    SCHOOL = "school"
+
+
+class RatingPeriod(str, Enum):
+    ALL = "all"
+    WEEK = "week"
+    MONTH = "month"
+    YEAR = "year"
 
 
 def _normalize_status(value: object) -> str:
@@ -37,28 +65,39 @@ def _score_from_counts(correct_answers: int, total_questions: int) -> float:
     return (correct_answers / total_questions) * 100 if total_questions > 0 else 0.0
 
 
-async def _load_questions(question_ids: list[UUID]) -> list[QuestionRedis]:
-    questions: list[QuestionRedis] = []
+async def _load_questions(question_ids: list[UUID]) -> dict[UUID, QuestionRedis]:
+    """Load QuestionRedis records keyed by question_id.
+
+    Deliberately keyed by id rather than returned as a plain list: QuestionRedis is
+    cached globally per-question (many sessions can share one bank question), so its
+    own `.index` field may not match *this* session's position for that question.
+    Position must always come from this session's own `question_ids` ordering.
+    """
+    questions: dict[UUID, QuestionRedis] = {}
     for question_id in question_ids:
         try:
-            questions.append(await QuestionRedis.get(question_id))
+            questions[question_id] = await QuestionRedis.get(question_id)
         except Exception:
             continue
     return questions
 
 
-def _group_scores(questions: list[QuestionRedis], answers: dict[str, str]) -> list[GroupScore]:
+def _group_scores(
+    question_ids: list[UUID],
+    questions_by_id: dict[UUID, QuestionRedis],
+    answers: dict[str, str],
+) -> list[GroupScore]:
     grouped: dict[str, dict[str, int]] = {}
-    for question in questions:
+    for position, question_id in enumerate(question_ids):
+        question = questions_by_id.get(question_id)
+        if question is None:
+            continue
         group = getattr(question, "category", None) or "general"
-        try:
-            index_key = int(getattr(question, "index", 0))
-        except Exception:
-            index_key = getattr(question, "index", 0)
         if group not in grouped:
             grouped[group] = {"correct": 0, "total": 0}
         grouped[group]["total"] += 1
-        if answers.get(str(index_key)) == getattr(question, "correct_answer", None):
+        question_type = getattr(question, "question_type", "single")
+        if is_correct_answer(question_type, getattr(question, "correct_answer", None), answers.get(str(position))):
             grouped[group]["correct"] += 1
 
     scores: list[GroupScore] = []
@@ -78,15 +117,15 @@ def _group_scores(questions: list[QuestionRedis], answers: dict[str, str]) -> li
 async def _build_result(session: SessionModel) -> Result:
     question_ids = _question_ids_from_session(session)
     answers = json.loads(session.answers or "{}")
-    questions = await _load_questions(question_ids)
+    questions_by_id = await _load_questions(question_ids)
 
     correct_answers = 0
-    for question in questions:
-        try:
-            index_key = int(getattr(question, "index", 0))
-        except Exception:
-            index_key = getattr(question, "index", 0)
-        if answers.get(str(index_key)) == getattr(question, "correct_answer", None):
+    for position, question_id in enumerate(question_ids):
+        question = questions_by_id.get(question_id)
+        if question is None:
+            continue
+        question_type = getattr(question, "question_type", "single")
+        if is_correct_answer(question_type, getattr(question, "correct_answer", None), answers.get(str(position))):
             correct_answers += 1
 
     total_questions = len(question_ids)
@@ -118,7 +157,7 @@ async def _build_result(session: SessionModel) -> Result:
         rank=None,
         total_questions=total_questions,
         correct_answers=correct_answers,
-        group_scores=_group_scores(questions, answers),
+        group_scores=_group_scores(question_ids, questions_by_id, answers),
     )
 
 
@@ -142,9 +181,14 @@ async def _load_session(session_id: UUID) -> SessionModel | None:
     return None
 
 
-async def _load_finished_sessions() -> list[SessionModel]:
+async def _load_finished_sessions(test_id: UUID | None = None) -> list[SessionModel]:
     try:
-        return await SessionModel.find(SessionModel.status == SessionStatus.FINISHED).all()
+        query = SessionModel.find(SessionModel.status == SessionStatus.FINISHED)
+        if test_id is not None:
+            query = SessionModel.find(
+                (SessionModel.status == SessionStatus.FINISHED) & (SessionModel.test_id == test_id)
+            )
+        return await query.all()
     except QueryNotSupportedError:
         pass
     except Exception:
@@ -159,11 +203,29 @@ async def _load_finished_sessions() -> list[SessionModel]:
             except NotFoundError:
                 continue
             status_value = session.status.value if isinstance(session.status, SessionStatus) else str(session.status)
-            if status_value == SessionStatus.FINISHED.value:
-                sessions.append(session)
+            if status_value != SessionStatus.FINISHED.value:
+                continue
+            if test_id is not None and str(session.test_id) != str(test_id):
+                continue
+            sessions.append(session)
     except Exception:
         return []
     return sessions
+
+
+async def _current_user_scope_ids(current_user: UserFull) -> tuple[UUID | None, UUID | None, UUID | None]:
+    """Return (school_id, settlement_id, region_id) for the current user, derived
+    from their own school affiliation — used to restrict students to their own
+    school/city/region when they request a scoped rating."""
+    school = current_user.school
+    if school is None:
+        return None, None, None
+    settlement_id = school.city_id
+    region_id = None
+    if settlement_id is not None:
+        settlement = await SettlementDAO.get(settlement_id)
+        region_id = settlement.region_id if settlement else None
+    return school.id, settlement_id, region_id
 
 
 @router.get("/tests/result/{id}", response_model=Result)
@@ -182,11 +244,216 @@ async def get_tests_result_result_id(
     return await _build_result(session)
 
 
+@router.get("/tests/session/{sid}/review", response_model=SessionReview)
+async def get_session_review(
+    sid: UUID,
+    current_user: UserFull = Depends(require_permissions(Permissions.Sessions.READ_ANY)),
+) -> SessionReview:
+    """
+    Teacher/admin/admissions view of one student's attempt: every question, what
+    they answered, the correct answer, and time spent per question (PV-A-1:
+    "какие вопросы были у студента, как он ответил, сколько времени потратил").
+    """
+    session = await _load_session(sid)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    question_ids = _question_ids_from_session(session)
+    answers = json.loads(session.answers or "{}")
+    times = json.loads(getattr(session, "question_times", None) or "{}")
+    questions_by_id = await _load_questions(question_ids)
+
+    items: list[SessionReviewQuestion] = []
+    for position, question_id in enumerate(question_ids):
+        question = questions_by_id.get(question_id)
+        student_answer = answers.get(str(position))
+        question_type = getattr(question, "question_type", "single") if question else "single"
+        correct_answer = getattr(question, "correct_answer", None) if question else None
+        choices_raw = getattr(question, "choices", None) if question else None
+        try:
+            choices = json.loads(choices_raw) if choices_raw else []
+        except (TypeError, ValueError):
+            choices = []
+        items.append(
+            SessionReviewQuestion(
+                index=position,
+                prompt=getattr(question, "content", None) if question else None,
+                choices=choices,
+                correct_answer=correct_answer,
+                student_answer=student_answer,
+                is_correct=is_correct_answer(question_type, correct_answer, student_answer),
+                time_spent_seconds=times.get(str(position), 0),
+            )
+        )
+
+    return SessionReview(
+        sid=UUID(str(session.sid)),
+        test_id=UUID(str(session.test_id)),
+        user_id=UUID(str(session.user_id)),
+        score=getattr(session, "score", None),
+        questions=items,
+    )
+
+
+@router.get("/tests/{test_id}/analysis", response_model=TestAnalysisOut)
+async def get_test_analysis(
+    test_id: UUID,
+    current_user: UserFull = Depends(require_permissions(Permissions.Tests.READ_ANALYSIS)),
+) -> TestAnalysisOut:
+    """
+    Per-question discriminativity/difficulty analysis across every finished
+    attempt of this test — the Admin PDF's "Аналитика вопросов" tab.
+    """
+    test = await TestDAO.get(test_id)
+    if not test:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+
+    sessions = await _load_finished_sessions(test_id=test_id)
+
+    records_by_question: dict[UUID, list[AttemptRecord]] = {}
+    for session in sessions:
+        question_ids = _question_ids_from_session(session)
+        answers = json.loads(session.answers or "{}")
+        total_score = session.score or 0.0
+        for position, question_id in enumerate(question_ids):
+            answer = answers.get(str(position))
+            if answer is None:
+                continue
+            try:
+                question = await QuestionRedis.get(question_id)
+            except Exception:
+                continue
+            question_type = getattr(question, "question_type", "single")
+            correct = is_correct_answer(question_type, getattr(question, "correct_answer", None), answer)
+            records_by_question.setdefault(question_id, []).append(
+                AttemptRecord(total_score=total_score, is_correct=correct)
+            )
+
+    if not records_by_question:
+        return TestAnalysisOut(
+            test_id=test_id, avg_discrimination=0.0, avg_difficulty=0.0, avg_attempts=0.0,
+            avg_effective_weight=0.0, questions=[],
+        )
+
+    snapshots: dict[UUID, QuestionRedis] = {}
+    for question_id in records_by_question:
+        try:
+            snapshots[question_id] = await QuestionRedis.get(question_id)
+        except Exception:
+            continue
+
+    stats_by_question = {
+        question_id: compute_question_stats(
+            records, num_choices=len(json.loads(getattr(snapshots.get(question_id), "choices", None) or "[]"))
+        )
+        for question_id, records in records_by_question.items()
+    }
+
+    mark_out_of_by_question = {
+        question_id: getattr(snapshots.get(question_id), "mark_out_of", 1) for question_id in records_by_question
+    }
+    std_dev_by_question = {qid: s.std_dev for qid, s in stats_by_question.items()}
+    weights_by_question = compute_weights(mark_out_of_by_question, std_dev_by_question)
+
+    questions_out: list[QuestionAnalysisOut] = []
+    for question_id, stats in stats_by_question.items():
+        snapshot = snapshots.get(question_id)
+        weights = weights_by_question[question_id]
+        questions_out.append(
+            QuestionAnalysisOut(
+                question_id=question_id,
+                category=getattr(snapshot, "category", "") or "",
+                question_type=getattr(snapshot, "question_type", "single"),
+                attempts=stats.attempts,
+                difficulty=stats.difficulty,
+                discrimination=stats.discrimination,
+                guess_score=stats.guess_score,
+                effective_discrimination=stats.effective_discrimination,
+                std_dev=stats.std_dev,
+                intended_weight=weights.intended_weight,
+                effective_weight=weights.effective_weight,
+            )
+        )
+
+    n = len(questions_out)
+    return TestAnalysisOut(
+        test_id=test_id,
+        avg_discrimination=sum(q.discrimination for q in questions_out) / n,
+        avg_difficulty=sum(q.difficulty for q in questions_out) / n,
+        avg_attempts=sum(q.attempts for q in questions_out) / n,
+        avg_effective_weight=sum(q.effective_weight for q in questions_out) / n,
+        questions=questions_out,
+    )
+
+
+_PERIOD_DELTAS = {
+    RatingPeriod.WEEK: timedelta(days=7),
+    RatingPeriod.MONTH: timedelta(days=30),
+    RatingPeriod.YEAR: timedelta(days=365),
+}
+
+# Students may only ever see their own scope; teachers/admins/admissions are
+# unrestricted and may target any school/city/region explicitly.
+_UNRESTRICTED_ROLES = {"teacher", "admin", "admissions_committee"}
+
+
 @router.get("/tests/leaderboard", response_model=list[LeaderboardEntry])
 async def get_tests_leaderboard(
     current_user: UserFull = Depends(get_current_user),
+    scope: RatingScope = Query(RatingScope.GLOBAL),
+    period: RatingPeriod = Query(RatingPeriod.ALL),
+    test_id: UUID | None = None,
+    region_id: UUID | None = None,
+    settlement_id: UUID | None = None,
+    school_id: UUID | None = None,
 ) -> list[LeaderboardEntry]:
-    sessions = await _load_finished_sessions()
+    is_privileged = (current_user.role in _UNRESTRICTED_ROLES) and not current_user.is_guest
+    if scope != RatingScope.GLOBAL and not is_privileged:
+        # Students (and guests) are always scoped to their own school/city/region,
+        # regardless of what they pass in region_id/settlement_id/school_id.
+        school_id, settlement_id, region_id = await _current_user_scope_ids(current_user)
+
+    sessions = await _load_finished_sessions(test_id=test_id)
+    if not sessions:
+        return []
+
+    cutoff = None
+    delta = _PERIOD_DELTAS.get(period)
+    if delta is not None:
+        cutoff = datetime.now(timezone.utc) - delta
+    if cutoff is not None:
+        def _finished_after_cutoff(s: SessionModel) -> bool:
+            finish = s.time_finish
+            if finish is None:
+                return False
+            if finish.tzinfo is None:
+                finish = finish.replace(tzinfo=timezone.utc)
+            return finish >= cutoff
+
+        sessions = [s for s in sessions if _finished_after_cutoff(s)]
+
+    user_ids = {UUID(str(s.user_id)) for s in sessions}
+    users_by_id = await UserDAO().get_users_by_ids(list(user_ids))
+
+    if scope != RatingScope.GLOBAL:
+        def _in_scope(session: SessionModel) -> bool:
+            user = users_by_id.get(UUID(str(session.user_id)))
+            school = getattr(user, "school", None)
+            settlement = getattr(school, "settlement", None) if school else None
+            if scope == RatingScope.SCHOOL:
+                return school_id is not None and school is not None and school.id == school_id
+            if scope == RatingScope.CITY:
+                return settlement_id is not None and school is not None and school.city_id == settlement_id
+            if scope == RatingScope.REGION:
+                return (
+                    region_id is not None
+                    and settlement is not None
+                    and settlement.region_id == region_id
+                )
+            return True
+
+        sessions = [s for s in sessions if _in_scope(s)]
+
     if not sessions:
         return []
 
@@ -199,12 +466,14 @@ async def get_tests_leaderboard(
 
     leaderboard: list[LeaderboardEntry] = []
     for idx, (_, session, result) in enumerate(entries, start=1):
-        user = await UserDAO().get_user_by_id(str(session.user_id))
+        user = users_by_id.get(UUID(str(session.user_id)))
         nickname = getattr(user, "nickname", None) if user else None
+        school = getattr(user, "school", None) if user else None
         leaderboard.append(
             LeaderboardEntry(
                 rank=idx,
                 nickname=nickname or "Anonymous",
+                school=getattr(school, "short_name", None) or getattr(school, "full_name", None) if school else None,
                 score=result.score or 0.0,
                 test_id=UUID(str(session.test_id)),
                 group_scores=result.group_scores,

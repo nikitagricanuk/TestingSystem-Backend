@@ -4,7 +4,7 @@ from asyncpg import ForeignKeyViolationError, UniqueViolationError
 
 from app.core.databases import connection
 from app.core.log import setup_logger
-from app.models.database import User, Role, Permission, role2permission, School
+from app.models.database import User, Role, Permission, role2permission, School, Settlement, Region
 from sqlalchemy import select, exists, func
 from sqlalchemy.orm import selectinload
 
@@ -21,7 +21,8 @@ logger = setup_logger(__name__)
 class RoleEnum(Enum):
     ADMIN = "admin"
     STUDENT = "student"
-    # Add other roles as needed
+    TEACHER = "teacher"
+    ADMISSIONS_COMMITTEE = "admissions_committee"
 
 # Fields that can be updated via generic update methods (profile-level only)
 _ALLOWED_UPDATE_FIELDS = {
@@ -29,8 +30,8 @@ _ALLOWED_UPDATE_FIELDS = {
     "phone_number", "school", "school_id"
 }
 
-def _normalize_email(value: str) -> str:
-    return value.strip().lower()
+def _normalize_email(value: str | None) -> str | None:
+    return value.strip().lower() if value else None
 
 
 def _filter_update_payload(payload: Mapping[str, Any]) -> dict:
@@ -62,9 +63,9 @@ async def _resolve_school(
 
 class UserDAO:
     @connection
-    async def create(self, full_name: str, nickname: str, age: int, email: str, phone: str,
+    async def create(self, full_name: str, nickname: str, age: int | None, email: str | None, phone: str,
                      password: str, role: UUID, school: School | None = None,
-                     school_id: UUID | str | None = None,
+                     school_id: UUID | str | None = None, is_guest: bool = False,
                      session = None) -> User:
         email = _normalize_email(email)
         school_obj = await _resolve_school(session, school=school, school_id=school_id)
@@ -78,6 +79,7 @@ class UserDAO:
                 password=password,
                 role_id=role,  # Use the same session
                 school=school_obj,
+                is_guest=is_guest,
             )
         except UniqueViolationError as e:
             logger.error("Failed to create user email=%s due to unique violation: %s", email, e)
@@ -304,6 +306,23 @@ class UserDAO:
             )
         )
         return result.scalars().all()
+
+    @connection
+    async def get_users_by_ids(
+        self, user_ids: Sequence[UUID], session: Optional[AsyncSession] = None
+    ) -> dict[UUID, User]:
+        """Bulk-fetch users with school -> settlement -> region eager-loaded, for
+        building region/city/school-scoped ratings without an N+1 query per row."""
+        if not user_ids:
+            return {}
+        result = await session.execute(
+            select(User)
+            .options(
+                selectinload(User.school).selectinload(School.settlement).selectinload(Settlement.region),
+            )
+            .where(User.id.in_(user_ids))
+        )
+        return {user.id: user for user in result.scalars().all()}
 
     @classmethod
     def users_query(cls):

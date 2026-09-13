@@ -79,7 +79,7 @@ def patch_session_maker(monkeypatch):
 @pytest.fixture()
 def patch_daos(monkeypatch):
     from app.repositories.dao.testdao import TestDAO
-    from app.repositories.question_bank.question_dao import QuestionDAO
+    from app.repositories.question_bank.question_dao import QuestionDAO, CategoryDAO
 
     state = {}
 
@@ -141,6 +141,47 @@ def patch_daos(monkeypatch):
     async def fake_delete_question(question_id: UUID, session=None):
         state["deleted_question_id"] = question_id
         return None
+
+    async def fake_add_rule(test_id, category_id, is_mandatory=True, fixed_position=None, session=None):
+        rule = SimpleNamespace(
+            id=uuid4(),
+            test_id=test_id,
+            category_id=category_id,
+            is_mandatory=is_mandatory,
+            fixed_position=fixed_position,
+        )
+        state.setdefault("rules", []).append(rule)
+        return rule
+
+    async def fake_list_rules(test_id, session=None):
+        return state.get("rules", [])
+
+    async def fake_remove_rule(rule_id, session=None):
+        rules = state.get("rules", [])
+        remaining = [r for r in rules if r.id != rule_id]
+        removed = len(remaining) != len(rules)
+        state["rules"] = remaining
+        return removed
+
+    async def fake_category_get(category_id, session=None):
+        category = state.get("category")
+        if category is None or category.id != category_id:
+            from app.repositories.question_bank.exceptions import CategoryNotFound
+            raise CategoryNotFound("not found")
+        return category
+
+    async def fake_category_get_or_create_path(path, owner_id=None, session=None):
+        return state.get("category") or SimpleNamespace(id=uuid4(), category=path[-1], owner_id=owner_id)
+
+    async def fake_list_by_category(category_id, include_descendants=False, teacher_id=None, session=None):
+        return state.get("questions_by_category", [])
+
+    monkeypatch.setattr(TestDAO, "add_rule", fake_add_rule, raising=False)
+    monkeypatch.setattr(TestDAO, "list_rules", fake_list_rules, raising=False)
+    monkeypatch.setattr(TestDAO, "remove_rule", fake_remove_rule, raising=False)
+    monkeypatch.setattr(CategoryDAO, "get", fake_category_get, raising=False)
+    monkeypatch.setattr(CategoryDAO, "get_or_create_path", fake_category_get_or_create_path, raising=False)
+    monkeypatch.setattr(QuestionDAO, "list_by_category", fake_list_by_category, raising=False)
 
     monkeypatch.setattr(TestDAO, "list", fake_list_tests, raising=False)
     monkeypatch.setattr(TestDAO, "get", fake_get_test, raising=False)
@@ -345,3 +386,98 @@ def test_delete_test_question(client: TestClient, patch_session_maker, patch_dao
     body = res.json()
     assert body["id"] == str(question_id)
     assert patch_daos["removed_question_id"] == question_id
+
+
+def test_create_rule_success(client: TestClient, patch_session_maker, patch_daos, override_user):
+    test_id = uuid4()
+    category_id = uuid4()
+    patch_daos["test_by_id"] = SimpleNamespace(id=test_id)
+    patch_daos["category"] = SimpleNamespace(id=category_id, category="Topic", owner_id=override_user)
+
+    res = client.post(
+        f"/v1/tests/{test_id}/rules",
+        json={"category_id": str(category_id), "is_mandatory": True, "fixed_position": 3},
+    )
+
+    assert res.status_code == 201
+    body = res.json()
+    assert body["category_id"] == str(category_id)
+    assert body["fixed_position"] == 3
+
+
+def test_create_rule_forbidden_for_other_owner_category(
+    client: TestClient, patch_session_maker, patch_daos, override_user
+):
+    test_id = uuid4()
+    category_id = uuid4()
+    patch_daos["test_by_id"] = SimpleNamespace(id=test_id)
+    patch_daos["category"] = SimpleNamespace(id=category_id, category="Topic", owner_id=uuid4())
+
+    res = client.post(f"/v1/tests/{test_id}/rules", json={"category_id": str(category_id)})
+
+    assert res.status_code == 403
+
+
+def test_list_rules_returns_payload(client: TestClient, patch_session_maker, patch_daos):
+    test_id = uuid4()
+    patch_daos["test_by_id"] = SimpleNamespace(id=test_id)
+    patch_daos["rules"] = [
+        SimpleNamespace(id=uuid4(), test_id=test_id, category_id=uuid4(), is_mandatory=True, fixed_position=None)
+    ]
+
+    res = client.get(f"/v1/tests/{test_id}/rules")
+
+    assert res.status_code == 200
+    assert len(res.json()) == 1
+
+
+def test_delete_rule_success(client: TestClient, patch_session_maker, patch_daos, override_user):
+    test_id = uuid4()
+    category_id = uuid4()
+    rule_id = uuid4()
+    patch_daos["category"] = SimpleNamespace(id=category_id, category="Topic", owner_id=override_user)
+    patch_daos["rules"] = [
+        SimpleNamespace(id=rule_id, test_id=test_id, category_id=category_id, is_mandatory=True, fixed_position=None)
+    ]
+
+    res = client.delete(f"/v1/tests/{test_id}/rules/{rule_id}")
+
+    assert res.status_code == 204
+    assert patch_daos["rules"] == []
+
+
+def test_upload_questions_append_creates_and_attaches(
+    client: TestClient, patch_session_maker, patch_daos, override_user
+):
+    test_id = uuid4()
+    patch_daos["test_by_id"] = SimpleNamespace(id=test_id)
+
+    xml = (
+        '<questions><question type="text" mark_out_of="1" penalty="0" category="Topic">'
+        "<text>Q</text><answer>A</answer></question></questions>"
+    )
+
+    res = client.put(
+        f"/v1/tests/{test_id}/question/upload",
+        files={"file": ("questions.xml", xml, "application/xml")},
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["text"] == "Q"
+    assert patch_daos["added_questions"] == [patch_daos["created_question"].id]
+
+
+def test_upload_questions_invalid_xml_returns_400(
+    client: TestClient, patch_session_maker, patch_daos, override_user
+):
+    test_id = uuid4()
+    patch_daos["test_by_id"] = SimpleNamespace(id=test_id)
+
+    res = client.put(
+        f"/v1/tests/{test_id}/question/upload",
+        files={"file": ("questions.xml", "<questions><question>", "application/xml")},
+    )
+
+    assert res.status_code == 400

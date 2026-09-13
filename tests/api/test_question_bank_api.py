@@ -82,7 +82,7 @@ def patch_daos(monkeypatch):
 
     state = {}
 
-    async def fake_list(*, offset=0, limit=100, session=None):
+    async def fake_list(*, owner_id=None, offset=0, limit=100, session=None):
         return state.get("categories", [])[offset:offset + limit]
 
     async def fake_get(category_id: UUID, session=None):
@@ -92,8 +92,8 @@ def patch_daos(monkeypatch):
             raise CategoryNotFound("not found")
         return category
 
-    async def fake_create(name: str, session=None):
-        category = SimpleNamespace(id=uuid4(), category=name, parent_id=None)
+    async def fake_create(name: str, owner_id=None, parent_id=None, session=None):
+        category = SimpleNamespace(id=uuid4(), category=name, parent_id=parent_id, owner_id=owner_id)
         state["created_category"] = category
         return category
 
@@ -111,17 +111,17 @@ def patch_daos(monkeypatch):
         state["deleted_category_id"] = category_id
         return None
 
-    async def fake_get_by_path(path, session=None):
+    async def fake_get_by_path(path, owner_id=None, session=None):
         category = state.get("category_by_path")
         if category is None:
             from app.repositories.question_bank.exceptions import CategoryNotFound
             raise CategoryNotFound("not found")
         return category
 
-    async def fake_get_or_create_path(path, session=None):
+    async def fake_get_or_create_path(path, owner_id=None, session=None):
         category = state.get("category_by_path")
         if category is None:
-            category = SimpleNamespace(id=uuid4(), category="path", parent_id=None)
+            category = SimpleNamespace(id=uuid4(), category="path", parent_id=None, owner_id=owner_id)
         return category
 
     async def fake_question_get(question_id: UUID, session=None):
@@ -184,10 +184,10 @@ def patch_daos(monkeypatch):
     return state
 
 
-def test_list_categories(client: TestClient, patch_session_maker, patch_daos):
+def test_list_categories(client: TestClient, patch_session_maker, patch_daos, override_user):
     patch_daos["categories"] = [
-        SimpleNamespace(id=uuid4(), category="Math", parent_id=None),
-        SimpleNamespace(id=uuid4(), category="Physics", parent_id=None),
+        SimpleNamespace(id=uuid4(), category="Math", parent_id=None, owner_id=override_user),
+        SimpleNamespace(id=uuid4(), category="Physics", parent_id=None, owner_id=override_user),
     ]
 
     res = client.get("/v1/categories")
@@ -198,13 +198,13 @@ def test_list_categories(client: TestClient, patch_session_maker, patch_daos):
     assert body[0]["name"] == "Math"
 
 
-def test_get_category_not_found(client: TestClient, patch_session_maker, patch_daos):
+def test_get_category_not_found(client: TestClient, patch_session_maker, patch_daos, override_user):
     res = client.get(f"/v1/categories/{uuid4()}")
 
     assert res.status_code == 404
 
 
-def test_create_category_with_parent(client: TestClient, patch_session_maker, patch_daos):
+def test_create_category_with_parent(client: TestClient, patch_session_maker, patch_daos, override_user):
     parent_id = uuid4()
 
     res = client.post("/v1/categories", json={"name": "Biology", "parent_id": str(parent_id)})
@@ -215,16 +215,25 @@ def test_create_category_with_parent(client: TestClient, patch_session_maker, pa
     assert body["parent_id"] == str(parent_id)
 
 
-def test_update_category_empty_payload(client: TestClient, patch_session_maker):
+def test_update_category_empty_payload(client: TestClient, patch_session_maker, override_user):
     res = client.patch(f"/v1/categories/{uuid4()}", json={})
 
     assert res.status_code == 400
     assert res.json()["detail"] == "No updatable fields provided"
 
 
-def test_delete_category_returns_category(client: TestClient, patch_session_maker, patch_daos):
+def test_update_category_forbidden_for_other_owner(client: TestClient, patch_session_maker, patch_daos, override_user):
     category_id = uuid4()
-    patch_daos["category"] = SimpleNamespace(id=category_id, category="History", parent_id=None)
+    patch_daos["category"] = SimpleNamespace(id=category_id, category="History", parent_id=None, owner_id=uuid4())
+
+    res = client.patch(f"/v1/categories/{category_id}", json={"name": "New name"})
+
+    assert res.status_code == 403
+
+
+def test_delete_category_returns_category(client: TestClient, patch_session_maker, patch_daos, override_user):
+    category_id = uuid4()
+    patch_daos["category"] = SimpleNamespace(id=category_id, category="History", parent_id=None, owner_id=override_user)
 
     res = client.delete(f"/v1/categories/{category_id}")
 
@@ -232,6 +241,15 @@ def test_delete_category_returns_category(client: TestClient, patch_session_make
     body = res.json()
     assert body["id"] == str(category_id)
     assert patch_daos["deleted_category_id"] == category_id
+
+
+def test_delete_category_forbidden_for_other_owner(client: TestClient, patch_session_maker, patch_daos, override_user):
+    category_id = uuid4()
+    patch_daos["category"] = SimpleNamespace(id=category_id, category="History", parent_id=None, owner_id=uuid4())
+
+    res = client.delete(f"/v1/categories/{category_id}")
+
+    assert res.status_code == 403
 
 
 def test_list_questions_filters_by_category_path(client: TestClient, patch_session_maker, patch_daos, override_user):

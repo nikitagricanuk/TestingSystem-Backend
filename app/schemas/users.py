@@ -9,13 +9,14 @@ from app.utils.time import get_current_time
 class User(BaseModel):
     id: UUID
     nickname: str
-    email: str
+    email: str | None = None
     is_active: bool
     role: str | None = None
     created_at: datetime
     created_at_unix: int
     updated_at: datetime | None = None
     updated_at_unix: int | None = None
+    is_guest: bool = False
 
 class School(BaseModel):
     id: UUID
@@ -29,7 +30,7 @@ class SchoolRef(BaseModel):
 class UserShort(BaseModel):
     id: UUID
     full_name: str
-    email: str
+    email: str | None = None
     is_active: bool
     role: str | None = None
 
@@ -39,6 +40,7 @@ class UserFull(User):
     phone: str | None = None
     school: School | None = None
     permissions: list[str] = []
+    is_graduated: bool | None = None
 
 class UserCreate(BaseModel):
     full_name: str

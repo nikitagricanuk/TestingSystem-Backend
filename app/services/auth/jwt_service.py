@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 from datetime import timedelta, datetime
-from typing import Any, Optional, Dict
+from typing import Any, Callable, Optional, Dict
 from uuid import uuid4
 import inspect
 
 from jwcrypto import jwt as jw_jwt, jwk
 
 from app.core.config import settings
+from app.core.databases import init_redis_connection
 from app.utils.time import get_current_time, datetime_to_unix
 from .sessions import Session
 
@@ -36,6 +37,7 @@ class JWTService:
                  refresh_secret: Optional[str] = None,
                  leeway_seconds: int = 0,
                  token_store: Optional[Any] = None,
+                 token_store_factory: Optional[Callable[[], Any]] = None,
                  token_prefix: str = "rt:" ) -> None:
         self.issuer = issuer
         self.audience = audience
@@ -44,8 +46,20 @@ class JWTService:
         self.refresh_ttl_minutes = refresh_ttl_minutes
         self.leeway_seconds = leeway_seconds
 
+        # `token_store` may be provided directly (e.g. in tests), or lazily resolved via
+        # `token_store_factory` on first use so importing this module never opens a
+        # Redis connection (mirrors the lazy-connect pattern in .sessions.Session).
         self.token_store = token_store
+        self._token_store_factory = token_store_factory
         self.token_prefix = token_prefix
+
+    def _get_token_store(self) -> Optional[Any]:
+        if self.token_store is None and self._token_store_factory is not None:
+            try:
+                self.token_store = self._token_store_factory()
+            except Exception:
+                return None
+        return self.token_store
 
         # Accept either JWKs **or** raw secrets; derive keys if secrets are provided.
         if access_jwk and refresh_jwk:
@@ -123,13 +137,14 @@ class JWTService:
         raise ValueError(f"Invalid token: {last_err}")
     async def __store_refresh_record(self, jti: str, subject: str, exp_ts: int) -> None:
         """Allow-list a refresh token by its JTI with an expiry matching the token's exp."""
-        if not self.token_store:
+        store = self._get_token_store()
+        if not store:
             return
         ttl = max(0, exp_ts - datetime_to_unix(get_current_time()))
         key = f"{self.token_prefix}{jti}"
         value = subject
         try:
-            setex = getattr(self.token_store, "setex", None)
+            setex = getattr(store, "setex", None)
             if not setex:
                 return
             if inspect.iscoroutinefunction(setex):
@@ -142,11 +157,12 @@ class JWTService:
 
     async def __check_refresh_record(self, jti: str) -> bool:
         """Return True if the refresh token JTI is present in the allow-list (or if no store configured)."""
-        if not self.token_store:
+        store = self._get_token_store()
+        if not store:
             return True
         key = f"{self.token_prefix}{jti}"
         try:
-            get_fn = getattr(self.token_store, "get", None)
+            get_fn = getattr(store, "get", None)
             if not get_fn:
                 return True
             if inspect.iscoroutinefunction(get_fn):
@@ -159,11 +175,12 @@ class JWTService:
             return False
 
     async def __delete_refresh_record(self, jti: str) -> None:
-        if not self.token_store:
+        store = self._get_token_store()
+        if not store:
             return
         key = f"{self.token_prefix}{jti}"
         try:
-            delete_fn = getattr(self.token_store, "delete", None)
+            delete_fn = getattr(store, "delete", None)
             if not delete_fn:
                 return
             if inspect.iscoroutinefunction(delete_fn):
@@ -274,7 +291,9 @@ JWT = JWTService(
     refresh_ttl_minutes=settings.auth_jwt_refresh_token_expire_minutes,
     access_secret=settings.auth_jwt_secret_key,
     refresh_secret=settings.auth_jwt_refresh_secret_key,
-    token_store=getattr(settings, "redis", None),  # expects a redis-like client (sync or asyncio)
+    # Resolved lazily on first use so importing this module never opens a Redis
+    # connection (init_redis_connection() retries with backoff and can block/raise).
+    token_store_factory=init_redis_connection,
     token_prefix=getattr(settings, "auth_refresh_token_prefix", "rt:")
 )
 

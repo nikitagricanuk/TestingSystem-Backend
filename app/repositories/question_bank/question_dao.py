@@ -1,6 +1,6 @@
 from typing import Optional, Mapping, Any, Sequence, Iterable
 from uuid import UUID
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,6 +66,22 @@ class QuestionDAO:
         if not session:
             raise QuestionDAOError("Session is required")
         result = await session.execute(select(Question).offset(offset).limit(limit))
+        return result.scalars().all()
+
+    @staticmethod
+    @connection
+    async def get_many(question_ids: Sequence[UUID], session: AsyncSession = None) -> Sequence[Question]:
+        """Bulk-fetch questions (with category eager-loaded) preserving no particular
+        order — callers that need a specific order should re-sort by `question_ids`."""
+        if not session:
+            raise QuestionDAOError("Session is required")
+        if not question_ids:
+            return []
+        result = await session.execute(
+            select(Question)
+            .where(Question.id.in_(question_ids))
+            .options(selectinload(Question.category))
+        )
         return result.scalars().all()
 
     @staticmethod
@@ -158,13 +174,23 @@ class QuestionDAO:
 class CategoryDAO:
     @staticmethod
     @connection
-    async def create(name: str, session: AsyncSession) -> Category:
+    async def create(
+        name: str, owner_id: UUID | None = None, parent_id: UUID | None = None, session: AsyncSession = None
+    ) -> Category:
         if not session:
             raise CategoryDAOError("Session is required")
         if not name:
             raise CategoryCreateError("Category name cannot be None")
 
-        category = Category(category=name)
+        # The DB-level UniqueConstraint on (owner_id, parent_id, category) does not
+        # catch duplicate root categories: composite unique constraints treat any row
+        # containing a NULL column (parent_id, for root categories) as never equal to
+        # another such row, in both Postgres and SQLite. Check explicitly instead.
+        existing = await CategoryDAO.get_by_name(name, parent_id, owner_id=owner_id, session=session)
+        if existing is not None:
+            raise CategoryCreateError(f"Category '{name}' already exists")
+
+        category = Category(category=name, owner_id=owner_id, parent_id=parent_id)
         session.add(category)
         try:
             await session.flush()
@@ -189,10 +215,15 @@ class CategoryDAO:
 
     @staticmethod
     @connection
-    async def get_by_name(name: str, parent_id: Optional[UUID], session: AsyncSession) -> Optional[Category]:
+    async def get_by_name(
+        name: str,
+        parent_id: Optional[UUID],
+        owner_id: Optional[UUID] = None,
+        session: AsyncSession = None,
+    ) -> Optional[Category]:
         if not session:
             raise CategoryDAOError("Session is required")
-        query = select(Category).where(Category.category == name)
+        query = select(Category).where(Category.category == name, Category.owner_id == owner_id)
         if parent_id is None:
             query = query.where(Category.parent_id.is_(None))
         else:
@@ -202,14 +233,16 @@ class CategoryDAO:
 
     @staticmethod
     @connection
-    async def get_by_path(path: Iterable[str], session: AsyncSession) -> Category:
+    async def get_by_path(
+        path: Iterable[str], owner_id: Optional[UUID] = None, session: AsyncSession = None
+    ) -> Category:
         if not session:
             raise CategoryDAOError("Session is required")
         path_list = list(path)
         parent_id: Optional[UUID] = None
         category: Optional[Category] = None
         for name in path_list:
-            category = await CategoryDAO.get_by_name(name, parent_id, session=session)
+            category = await CategoryDAO.get_by_name(name, parent_id, owner_id=owner_id, session=session)
             if not category:
                 raise CategoryNotFound(f"Category path {'/'.join(path_list)} not found")
             parent_id = category.id
@@ -219,16 +252,18 @@ class CategoryDAO:
 
     @staticmethod
     @connection
-    async def get_or_create_path(path: Iterable[str], session: AsyncSession) -> Category:
+    async def get_or_create_path(
+        path: Iterable[str], owner_id: Optional[UUID] = None, session: AsyncSession = None
+    ) -> Category:
         if not session:
             raise CategoryDAOError("Session is required")
         path_list = list(path)
         parent_id: Optional[UUID] = None
         category: Optional[Category] = None
         for name in path_list:
-            category = await CategoryDAO.get_by_name(name, parent_id, session=session)
+            category = await CategoryDAO.get_by_name(name, parent_id, owner_id=owner_id, session=session)
             if not category:
-                category = Category(category=name, parent_id=parent_id)
+                category = Category(category=name, parent_id=parent_id, owner_id=owner_id)
                 session.add(category)
                 try:
                     await session.flush()
@@ -244,10 +279,18 @@ class CategoryDAO:
 
     @staticmethod
     @connection
-    async def list(offset: int = 0, limit: int = 100, session: AsyncSession = None) -> Sequence[Category]:
+    async def list(
+        owner_id: Optional[UUID] = None,
+        offset: int = 0,
+        limit: int = 100,
+        session: AsyncSession = None,
+    ) -> Sequence[Category]:
         if not session:
             raise CategoryDAOError("Session is required")
-        result = await session.execute(select(Category).offset(offset).limit(limit))
+        query = select(Category)
+        if owner_id is not None:
+            query = query.where(Category.owner_id == owner_id)
+        result = await session.execute(query.offset(offset).limit(limit))
         return result.scalars().all()
 
     @staticmethod
@@ -261,13 +304,19 @@ class CategoryDAO:
 
         try:
             category = await CategoryDAO.get(category_id, session=session)
+            target_parent_id = parent_id if parent_id is not None else category.parent_id
             if new_name:
-                existing = await session.execute(
-                    select(Category).where(
-                        Category.category == new_name,
-                        Category.id != category_id
-                    )
+                dup_query = select(Category).where(
+                    Category.category == new_name,
+                    Category.id != category_id,
                 )
+                dup_query = dup_query.where(
+                    Category.owner_id.is_(None) if category.owner_id is None else Category.owner_id == category.owner_id
+                )
+                dup_query = dup_query.where(
+                    Category.parent_id.is_(None) if target_parent_id is None else Category.parent_id == target_parent_id
+                )
+                existing = await session.execute(dup_query)
                 if existing.scalar_one_or_none():
                     raise CategoryUpdateError(f"Category '{new_name}' already exists")
                 category.category = new_name

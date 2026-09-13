@@ -10,7 +10,7 @@ class QuestionType(enum.Enum):
     text = "text"
 
 from sqlalchemy import (
-    String, Integer, Boolean, ForeignKey, Text,
+    String, Integer, Boolean, ForeignKey, Text, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy import JSON
@@ -22,8 +22,19 @@ JSON_TYPE = JSONB().with_variant(JSON(), "sqlite")
 from app.models import Base
 class Category(Base):
     __tablename__ = 'categories'
+    __table_args__ = (
+        UniqueConstraint("owner_id", "parent_id", "category", name="categories_owner_parent_name_key"),
+    )
 
-    category: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    category: Mapped[str] = mapped_column(String, nullable=False)
+
+    # Nullable so pre-existing global categories (created before per-teacher scoping)
+    # keep working; every category created through the API from here on gets an owner.
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=True,
+    )
 
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

@@ -8,8 +8,10 @@ from pydantic import BaseModel
 
 from ..schemas.sessions import Session, SessionDelete, SessionQuestion
 from ..session_service import SessionService
+from ..test_question_resolver import resolve_session_question_ids
 from app.core.log import setup_logger
 from ..question_bank.question_bank import get_qb
+from app.models.database import NavigationMethod
 from app.repositories.dao.testdao import TestDAO
 from app.services.auth.routers.auth import get_current_user
 from app.schemas.users import UserFull
@@ -47,8 +49,23 @@ def _question_text(question: object) -> str:
     return str(question)
 
 
+def _question_choices(question: object) -> list[str]:
+    raw = getattr(question, "choices", None)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
 def _question_status(answers: dict[str, str], index: int) -> str:
     return "answered" if str(index) in answers else "unanswered"
+
+
+def _is_linear(session_service: SessionService) -> bool:
+    return getattr(session_service.session, "navigation_method", "free") == NavigationMethod.LINEAR.value
 
 
 @router.post("/tests/{testId}/start", response_model=Session, status_code=status.HTTP_201_CREATED)
@@ -61,19 +78,26 @@ async def create_session(
     test = await TestDAO.get(testId)
     if not test:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
-    test_questions = await TestDAO.list_questions(testId)
-    if not test_questions:
+
+    resolved = await resolve_session_question_ids(test)
+    if not resolved.question_ids:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Test has no questions")
-    question_ids = [tq.question_id for tq in test_questions]
+
+    required_count = max(test.number_of_required_questions or 0, resolved.required_count)
+    navigation_method = test.navigation_method
+    if hasattr(navigation_method, "value"):
+        navigation_method = navigation_method.value
 
     session = await SessionService.create(
         user_id=current_user.id,
         test_id=testId,
-        question_ids=question_ids,
+        question_ids=resolved.question_ids,
         indefinite_questions=False,
         ip_address=request.client.host,
         device_type=request.headers.get("User-Agent"),
         qb=get_qb(),
+        required_count=required_count,
+        navigation_method=str(navigation_method or "free"),
     )
     logger.debug(f"Created new session with ID: {session.session.sid}")
     return await session.get()
@@ -129,11 +153,12 @@ async def get_tests_session_session_id_question_list(
     questions: list[SessionQuestion] = []
 
     for index, question_id in enumerate(question_ids):
-        question = await session_service.qb.get_question(question_id)
+        question = await session_service.get_question_by_index(index)
         questions.append(
             SessionQuestion(
                 index=index,
                 question=_question_text(question),
+                choices=_question_choices(question),
                 status=_question_status(answers, index),
             )
         )
@@ -152,19 +177,23 @@ async def get_tests_session_session_id_question_next(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
-    next_index = session_service.session.current_question_index + 1
+    current_index = session_service.session.current_question_index
+    next_index = current_index + 1
     if next_index >= len(question_ids):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No next question")
 
+    now = datetime.now(timezone.utc)
+    session_service.accumulate_time_for_question(current_index, now)
     session_service.session.current_question_index = next_index
-    session_service.session.last_activity = datetime.now(timezone.utc)
+    session_service.session.last_activity = now
     await session_service.session.save()
 
-    question = await session_service.qb.get_question(question_ids[next_index])
+    question = await session_service.get_question_by_index(next_index)
     answers = json.loads(session_service.session.answers or "{}")
     return SessionQuestion(
         index=next_index,
         question=_question_text(question),
+        choices=_question_choices(question),
         status=_question_status(answers, next_index),
     )
 
@@ -179,20 +208,29 @@ async def get_tests_session_session_id_question_prev(
     if session_service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    question_ids = await session_service._get_question_ids()  # type: ignore[attr-defined]
-    prev_index = session_service.session.current_question_index - 1
+    if _is_linear(session_service):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This test uses linear navigation: you cannot go back to a previous question",
+        )
+
+    current_index = session_service.session.current_question_index
+    prev_index = current_index - 1
     if prev_index < 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No previous question")
 
+    now = datetime.now(timezone.utc)
+    session_service.accumulate_time_for_question(current_index, now)
     session_service.session.current_question_index = prev_index
-    session_service.session.last_activity = datetime.now(timezone.utc)
+    session_service.session.last_activity = now
     await session_service.session.save()
 
-    question = await session_service.qb.get_question(question_ids[prev_index])
+    question = await session_service.get_question_by_index(prev_index)
     answers = json.loads(session_service.session.answers or "{}")
     return SessionQuestion(
         index=prev_index,
         question=_question_text(question),
+        choices=_question_choices(question),
         status=_question_status(answers, prev_index),
     )
 
@@ -214,11 +252,18 @@ async def get_tests_session_session_id_question_question_id(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found") from exc
 
+    if _is_linear(session_service) and index != session_service.session.current_question_index:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This test uses linear navigation: you can only view the current question",
+        )
+
     question = await session_service.get_question_by_index(index)
     answers = json.loads(session_service.session.answers or "{}")
     return SessionQuestion(
         index=index,
         question=_question_text(question),
+        choices=_question_choices(question),
         status=_question_status(answers, index),
     )
 
@@ -241,6 +286,12 @@ async def post_tests_session_session_id_question_question_id_answer(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found") from exc
 
+    if _is_linear(session_service) and index != session_service.session.current_question_index:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This test uses linear navigation: you can only answer the current question",
+        )
+
     # Use the service method to record the answer
     await session_service.answer_current_question(index, payload.answer)
 
@@ -257,5 +308,8 @@ async def post_tests_session_session_id_submit(
     session = await _load_user_session(sid, current_user)
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    await session.finish()
+    try:
+        await session.finish()
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return await session.get()

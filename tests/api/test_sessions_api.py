@@ -29,6 +29,18 @@ class FakeQuestionBank:
         return self.mapping[qid]
 
 
+def _patch_question_redis(monkeypatch, mapping: dict[UUID, object]):
+    """Question content is now served from QuestionRedis (the session-start
+    snapshot), not the legacy qb mock — patch it to read from the same mapping
+    the test already set up."""
+    from app.services.testing_engine import session_service
+
+    async def fake_get(question_id: UUID):
+        return mapping[question_id]
+
+    monkeypatch.setattr(session_service.QuestionRedis, "get", staticmethod(fake_get), raising=False)
+
+
 def _make_user(user_id: UUID) -> UserFull:
     now = datetime.now(timezone.utc)
     return UserFull(
@@ -62,6 +74,8 @@ def _make_session(
     time_finish: datetime | None = None,
     duration: int | None = None,
     score: float | None = None,
+    navigation_method: str = "free",
+    required_count: int = 0,
 ) -> FakeSession:
     now = datetime.now(timezone.utc)
     return FakeSession(
@@ -82,6 +96,9 @@ def _make_session(
         duration=duration,
         score=score,
         indefinite_questions=False,
+        navigation_method=navigation_method,
+        required_count=required_count,
+        question_times=json.dumps({}),
     )
 
 
@@ -119,7 +136,10 @@ def test_start_session_creates_session(client: TestClient, override_user, monkey
 
     qb = FakeQuestionBank({qid: SimpleNamespace(content=f"Q-{i}") for i, qid in enumerate(question_ids)})
 
-    async def fake_create(cls, *, user_id, test_id, question_ids, indefinite_questions, ip_address, device_type, qb):
+    async def fake_create(
+        cls, *, user_id, test_id, question_ids, indefinite_questions, ip_address, device_type, qb,
+        required_count=0, navigation_method="free",
+    ):
         session = _make_session(
             sid=uuid4(),
             test_id=test_id,
@@ -131,13 +151,19 @@ def test_start_session_creates_session(client: TestClient, override_user, monkey
     monkeypatch.setattr(sessions_router, "get_qb", lambda: qb)
     monkeypatch.setattr(SessionService, "create", classmethod(fake_create), raising=False)
     async def fake_get_test(_id):
-        return SimpleNamespace(id=test_id)
+        return SimpleNamespace(
+            id=test_id, shuffle=False, number_of_required_questions=None, navigation_method="free"
+        )
 
     async def fake_list_questions(_id):
         return [SimpleNamespace(question_id=qid) for qid in question_ids]
 
+    async def fake_list_rules(_id):
+        return []
+
     monkeypatch.setattr(TestDAO, "get", staticmethod(fake_get_test), raising=False)
     monkeypatch.setattr(TestDAO, "list_questions", staticmethod(fake_list_questions), raising=False)
+    monkeypatch.setattr(TestDAO, "list_rules", staticmethod(fake_list_rules), raising=False)
 
     res = client.post(f"/tests/{test_id}/start")
 
@@ -243,6 +269,7 @@ def test_question_list_returns_statuses(client: TestClient, override_user, monke
             question_ids[1]: SimpleNamespace(content="Q2"),
         }
     )
+    _patch_question_redis(monkeypatch, qb.mapping)
 
     async def fake_load(cls, session_id, qb):
         return SessionService(session, qb)
@@ -266,6 +293,7 @@ def test_get_question_by_id_returns_question(client: TestClient, override_user, 
     question_ids = [uuid4(), uuid4()]
     session = _make_session(sid=sid, test_id=uuid4(), user_id=override_user, question_ids=question_ids)
     qb = FakeQuestionBank({question_ids[0]: SimpleNamespace(content="Q1"), question_ids[1]: SimpleNamespace(content="Q2")})
+    _patch_question_redis(monkeypatch, qb.mapping)
 
     async def fake_load(cls, session_id, qb):
         return SessionService(session, qb)
@@ -294,6 +322,7 @@ def test_get_next_question_advances_index(client: TestClient, override_user, mon
         current_index=0,
     )
     qb = FakeQuestionBank({question_ids[0]: SimpleNamespace(content="Q1"), question_ids[1]: SimpleNamespace(content="Q2")})
+    _patch_question_redis(monkeypatch, qb.mapping)
 
     async def fake_load(cls, session_id, qb):
         return SessionService(session, qb)
@@ -322,6 +351,7 @@ def test_get_prev_question_moves_back(client: TestClient, override_user, monkeyp
         current_index=1,
     )
     qb = FakeQuestionBank({question_ids[0]: SimpleNamespace(content="Q1"), question_ids[1]: SimpleNamespace(content="Q2")})
+    _patch_question_redis(monkeypatch, qb.mapping)
 
     async def fake_load(cls, session_id, qb):
         return SessionService(session, qb)
@@ -335,6 +365,93 @@ def test_get_prev_question_moves_back(client: TestClient, override_user, monkeyp
     body = res.json()
     assert body["index"] == 0
     assert body["question"] == "Q1"
+
+
+def test_linear_navigation_blocks_prev(client: TestClient, override_user, monkeypatch):
+    from app.services.testing_engine.routers import sessions as sessions_router
+
+    sid = uuid4()
+    question_ids = [uuid4(), uuid4()]
+    session = _make_session(
+        sid=sid,
+        test_id=uuid4(),
+        user_id=override_user,
+        question_ids=question_ids,
+        current_index=1,
+        navigation_method="linear",
+    )
+    qb = FakeQuestionBank({question_ids[0]: SimpleNamespace(content="Q1"), question_ids[1]: SimpleNamespace(content="Q2")})
+    _patch_question_redis(monkeypatch, qb.mapping)
+
+    async def fake_load(cls, session_id, qb):
+        return SessionService(session, qb)
+
+    monkeypatch.setattr(SessionService, "load", classmethod(fake_load), raising=False)
+    monkeypatch.setattr(sessions_router, "get_qb", lambda: qb)
+
+    res = client.get(f"/tests/session/{sid}/question/prev")
+
+    assert res.status_code == 403
+
+
+def test_linear_navigation_blocks_jumping_to_other_question(client: TestClient, override_user, monkeypatch):
+    from app.services.testing_engine.routers import sessions as sessions_router
+
+    sid = uuid4()
+    question_ids = [uuid4(), uuid4()]
+    session = _make_session(
+        sid=sid,
+        test_id=uuid4(),
+        user_id=override_user,
+        question_ids=question_ids,
+        current_index=0,
+        navigation_method="linear",
+    )
+    qb = FakeQuestionBank({question_ids[0]: SimpleNamespace(content="Q1"), question_ids[1]: SimpleNamespace(content="Q2")})
+    _patch_question_redis(monkeypatch, qb.mapping)
+
+    async def fake_load(cls, session_id, qb):
+        return SessionService(session, qb)
+
+    monkeypatch.setattr(SessionService, "load", classmethod(fake_load), raising=False)
+    monkeypatch.setattr(sessions_router, "get_qb", lambda: qb)
+
+    # Jumping ahead to question index 1 while sitting at index 0 must be blocked.
+    res = client.get(f"/tests/session/{sid}/question/{question_ids[1]}")
+    assert res.status_code == 403
+
+    # Viewing the current question is still fine.
+    res = client.get(f"/tests/session/{sid}/question/{question_ids[0]}")
+    assert res.status_code == 200
+
+
+def test_linear_navigation_blocks_answering_other_question(client: TestClient, override_user, monkeypatch):
+    from app.services.testing_engine.routers import sessions as sessions_router
+
+    sid = uuid4()
+    question_ids = [uuid4(), uuid4()]
+    session = _make_session(
+        sid=sid,
+        test_id=uuid4(),
+        user_id=override_user,
+        question_ids=question_ids,
+        current_index=0,
+        navigation_method="linear",
+    )
+    qb = FakeQuestionBank({question_ids[0]: SimpleNamespace(content="Q1"), question_ids[1]: SimpleNamespace(content="Q2")})
+
+    async def fake_load(cls, session_id, qb):
+        return SessionService(session, qb)
+
+    monkeypatch.setattr(SessionService, "load", classmethod(fake_load), raising=False)
+    monkeypatch.setattr(sessions_router, "get_qb", lambda: qb)
+
+    res = client.post(
+        f"/tests/session/{sid}/question/{question_ids[1]}/answer",
+        json={"answer": "A"},
+    )
+
+    assert res.status_code == 403
 
 
 def test_answer_question_updates_session(client: TestClient, override_user, monkeypatch):
@@ -384,7 +501,7 @@ def test_submit_session_finishes_and_scores(client: TestClient, override_user, m
     async def fake_question_get(question_id):
         index = question_ids.index(question_id)
         correct = "A" if index == 0 else "B"
-        return SimpleNamespace(index=index, correct_answer=correct)
+        return SimpleNamespace(question_id=question_id, index=index, correct_answer=correct, question_type="single")
 
     monkeypatch.setattr(SessionService, "load", classmethod(fake_load), raising=False)
     monkeypatch.setattr(sessions_router, "get_qb", lambda: qb)
@@ -396,3 +513,65 @@ def test_submit_session_finishes_and_scores(client: TestClient, override_user, m
     body = res.json()
     assert body["status"] == "completed"
     assert body["score"] == 100.0
+
+
+def test_submit_blocked_until_required_questions_answered(client: TestClient, override_user, monkeypatch):
+    from app.services.testing_engine.routers import sessions as sessions_router
+
+    sid = uuid4()
+    question_ids = [uuid4(), uuid4(), uuid4()]
+    session = _make_session(
+        sid=sid,
+        test_id=uuid4(),
+        user_id=override_user,
+        question_ids=question_ids,
+        answers={"0": "A"},  # only 1 of 2 required questions answered
+        required_count=2,
+    )
+    # questions_remaining must reflect that 2 of 3 are still open for the gate to apply.
+    session.questions_remaining = 2
+    qb = FakeQuestionBank({qid: SimpleNamespace(content=f"Q{i}") for i, qid in enumerate(question_ids)})
+
+    async def fake_load(cls, session_id, qb):
+        return SessionService(session, qb)
+
+    monkeypatch.setattr(SessionService, "load", classmethod(fake_load), raising=False)
+    monkeypatch.setattr(sessions_router, "get_qb", lambda: qb)
+
+    res = client.post(f"/tests/session/{sid}/submit")
+
+    assert res.status_code == 400
+    assert session.status == SessionStatus.ACTIVE
+
+
+def test_submit_allowed_once_required_questions_answered(client: TestClient, override_user, monkeypatch):
+    from app.services.testing_engine.routers import sessions as sessions_router
+    from app.services.testing_engine import session_service
+
+    sid = uuid4()
+    question_ids = [uuid4(), uuid4(), uuid4()]
+    session = _make_session(
+        sid=sid,
+        test_id=uuid4(),
+        user_id=override_user,
+        question_ids=question_ids,
+        answers={"0": "A", "1": "A"},  # meets required_count, third question left open
+        required_count=2,
+    )
+    session.questions_remaining = 1
+    qb = FakeQuestionBank({qid: SimpleNamespace(content=f"Q{i}") for i, qid in enumerate(question_ids)})
+
+    async def fake_load(cls, session_id, qb):
+        return SessionService(session, qb)
+
+    async def fake_question_get(question_id):
+        return SimpleNamespace(question_id=question_id, correct_answer="A", question_type="single")
+
+    monkeypatch.setattr(SessionService, "load", classmethod(fake_load), raising=False)
+    monkeypatch.setattr(sessions_router, "get_qb", lambda: qb)
+    monkeypatch.setattr(session_service.QuestionRedis, "get", staticmethod(fake_question_get), raising=False)
+
+    res = client.post(f"/tests/session/{sid}/submit")
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "completed"

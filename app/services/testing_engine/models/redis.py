@@ -32,6 +32,15 @@ class Session(HashModel):
     last_activity: datetime = Field(default_factory=datetime.utcnow, index=False)
     duration: Optional[int] = Field(index=False, default=None)
     score: Optional[float] = Field(index=False, default=None)
+    # Count of mandatory questions (Test.number_of_required_questions plus any
+    # obligatory TestQuestionRule slots) that must be answered before the
+    # student may finish early — see SessionService.required_complete.
+    required_count: int = Field(index=False, default=0)
+    # Snapshot of Test.navigation_method ("free"/"linear") at session-start, so
+    # navigation enforcement never needs a Postgres round-trip per request.
+    navigation_method: str = Field(index=False, default="free")
+    # JSON dict {index: seconds_spent}, updated on each answer/navigation.
+    question_times: str = Field(index=False, default="{}")
 
     @validator('time_start', 'time_finish', pre=True)
     def parse_datetime(cls, v):
@@ -54,7 +63,13 @@ class QuestionRedis(HashModel):
     category: str = Field(index=False)
     content: str = Field(index=False)
     choices: str  # Вернуть тип на 'str'
+    # For question_type == "multiple" this is a JSON-encoded sorted list of correct
+    # choice values (e.g. '["0", "2"]'); for "single"/"text" it's a plain string,
+    # same as before. See app.services.testing_engine.grading for how it's read.
     correct_answer: str = Field(index=False)
+    question_type: str = Field(index=False, default="single")
+    mark_out_of: int = Field(index=False, default=1)
+    penalty: int = Field(index=False, default=0)
 
     class Meta:
         model_key_prefix = "question"

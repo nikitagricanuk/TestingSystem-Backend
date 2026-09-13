@@ -39,15 +39,19 @@ def patch_settings():
 
 @pytest.mark.asyncio
 async def test_category_crud(async_test_session):
+    # Categories are scoped per (owner_id, parent_id, category); use a fixed owner
+    # throughout so the duplicate-name assertions below stay meaningful.
+    teacher_id = uuid4()
+
     #Create
-    category = await CategoryDAO.create("Math", session=async_test_session)
+    category = await CategoryDAO.create("Math", owner_id=teacher_id, session=async_test_session)
     await async_test_session.commit()
     category_id = category.id
     assert isinstance(category_id, UUID)
 
     #Attempt to duplicate a category
     with pytest.raises(CategoryCreateError):
-        await CategoryDAO.create("Math", session=async_test_session)
+        await CategoryDAO.create("Math", owner_id=teacher_id, session=async_test_session)
     await async_test_session.rollback()
 
     #Incorrect data
@@ -88,7 +92,7 @@ async def test_category_crud(async_test_session):
     await async_test_session.rollback()
 
     #Updat to an existing name
-    category2 = await CategoryDAO.create("Biology", session=async_test_session)
+    category2 = await CategoryDAO.create("Biology", owner_id=teacher_id, session=async_test_session)
     await async_test_session.commit()
 
     with pytest.raises(CategoryUpdateError):

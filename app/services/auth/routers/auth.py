@@ -1,6 +1,7 @@
 from enum import Enum
 from uuid import UUID
 
+import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -18,6 +19,7 @@ from app.repositories.dao.exceptions import SchoolNotFoundError, UserAlreadyExis
 from app.repositories.dao.userdao import UserDAO, RoleEnum
 from app.schemas.users import User, UserCreate, LoginResponse, LoginRequest, UserCreateStudent, UserFull, UserShort, School as SchoolSchema, UserDelete
 from app.utils.password import get_hashed_password, verify_password
+from app.utils.guest_names import generate_guest_nickname
 from app.services.auth.jwt_service import get_jwt_service, JWTService
 from app.services.auth.sessions import Session
 from typing import Optional, cast, Any, Mapping
@@ -99,6 +101,8 @@ def _build_user_schema(db_user, *, include_permissions: bool = False) -> UserFul
         age=cast(Optional[int], getattr(db_user, "age", None)),
         phone=cast(Optional[str], getattr(db_user, "phone_number", None)),
         school=school_schema,
+        is_guest=bool(getattr(db_user, "is_guest", False)),
+        is_graduated=cast(Optional[bool], getattr(db_user, "is_graduated", None)),
     )
 
 
@@ -200,6 +204,44 @@ async def login(credentials: LoginRequest, request: Request,
     #                  "role": str(user.role_id) if user.role_id else None}
 
     # 4) Issue tokens
+    pair = await jwt.create(subject=str(user.id), session_ip=request.client.host)
+
+    return LoginResponse(
+        access_token=pair.access_token,
+        refresh_token=pair.refresh_token,
+        token_type="bearer",
+        access_token_expires_at=pair.access_token_expires_at.isoformat(),
+        access_token_expires_at_unix=int(pair.access_token_expires_at.timestamp()),
+        refresh_token_expires_at=pair.refresh_token_expires_at.isoformat(),
+        refresh_token_expires_at_unix=int(pair.refresh_token_expires_at.timestamp())
+    )
+
+
+@router.post("/guest", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
+async def create_guest_session(
+        request: Request,
+        jwt: JWTService = Depends(get_jwt_service)) -> LoginResponse:
+    """
+    Create a throwaway guest account (student-level access, no email/password) and
+    log it in immediately. Guests can take tests like any student, but are flagged
+    (User.is_guest) so admissions-committee tooling and certificates can exclude them.
+    """
+    nickname = generate_guest_nickname()
+    # Guests never authenticate with this password again; it only satisfies the
+    # NOT NULL/hashed-password expectations shared with real accounts.
+    unusable_password = get_hashed_password(secrets.token_urlsafe(32))
+
+    user = await UserDAO().create(
+        full_name=nickname,
+        nickname=nickname,
+        age=None,
+        email=None,
+        phone=None,
+        password=unusable_password,
+        role=await UserDAO().get_role_id(RoleEnum.STUDENT),
+        is_guest=True,
+    )
+
     pair = await jwt.create(subject=str(user.id), session_ip=request.client.host)
 
     return LoginResponse(

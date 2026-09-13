@@ -9,6 +9,8 @@ from aredis_om import NotFoundError
 from .models.redis import Session, QuestionRedis, SessionStatus
 from .question_bank.question_bank import QuestionBank, Question
 from .schemas.sessions import Session as SessionSchema
+from .grading import is_correct_answer
+from .question_snapshot import QuestionSnapshotService
 
 
 
@@ -35,12 +37,16 @@ class SessionService:
             ip_address: str,
             qb: QuestionBank,
             device_type: Optional[str] = None,
+            required_count: int = 0,
+            navigation_method: str = "free",
     ) -> Self:
         """
         Create a new testing session and wrap it in SessionService.
         """
         if not question_ids:
             raise ValueError("Cannot create a session without questions.")
+
+        await QuestionSnapshotService.snapshot_for_session(question_ids)
 
         session = Session(
             sid=str(uuid.uuid4()),
@@ -57,6 +63,9 @@ class SessionService:
             status=SessionStatus.ACTIVE,
             time_start=datetime.now(timezone.utc),
             last_activity=datetime.now(timezone.utc),
+            required_count=required_count,
+            question_times=json.dumps({}),
+            navigation_method=navigation_method,
         )
         await session.save()
         return cls(session, qb)
@@ -119,13 +128,19 @@ class SessionService:
 
     # --------- Object methods (no session_id argument) ---------
 
-    async def get_current_question(self) -> Question:
-        questions = await self._get_question_ids()
-        return await self.qb.get_question(questions[self.session.current_question_index])
+    async def get_current_question(self) -> QuestionRedis:
+        return await self.get_question_by_index(self.session.current_question_index)
 
-    async def get_question_by_index(self, question_index: int) -> Question:
-        questions = await self._get_question_ids()
-        return await self.qb.get_question(questions[question_index])
+    async def get_question_by_index(self, question_index: int) -> QuestionRedis:
+        """
+        Fetch the question at `question_index` in this session's own ordering.
+
+        Reads from the QuestionRedis snapshot taken at session-creation time
+        (see QuestionSnapshotService), not the legacy `self.qb` mock bank, so
+        students see the real question-bank content their test was built from.
+        """
+        question_ids = await self._get_question_ids()
+        return await QuestionRedis.get(question_ids[question_index])
 
     async def answer_current_question(
             self,
@@ -152,23 +167,50 @@ class SessionService:
             if session.questions_remaining > 0:
                 session.questions_remaining -= 1
 
+        now = datetime.now(timezone.utc)
+        self.accumulate_time_for_question(question_index, now)
+
         # Move pointer to the next question after this one
         session.current_question_index = question_index + 1
-        session.last_activity = datetime.now(timezone.utc)
+        session.last_activity = now
         session.answers = json.dumps(answers_dict)
 
         await session.save()
         return session
 
+    def accumulate_time_for_question(self, question_index: int, now: Optional[datetime] = None) -> None:
+        """Add the time since the session's last recorded activity to this
+        question's running total (a simple approximation of time-spent-per-question,
+        used for teacher attempt review — see PV-A-1's "сколько времени потратил на
+        каждый вопрос"). Called both when answering and when navigating away from
+        a question (see the sessions router's /next and /prev handlers)."""
+        now = now or datetime.now(timezone.utc)
+        session = self.session
+        last_activity = session.last_activity
+        if last_activity is None:
+            return
+        if last_activity.tzinfo is None:
+            last_activity = last_activity.replace(tzinfo=timezone.utc)
+        elapsed = max(0.0, (now - last_activity).total_seconds())
+
+        times = json.loads(getattr(session, "question_times", None) or "{}")
+        key = str(question_index)
+        times[key] = times.get(key, 0) + elapsed
+        session.question_times = json.dumps(times)
+
     async def next_question(self) -> Question:
+        now = datetime.now(timezone.utc)
+        self.accumulate_time_for_question(self.session.current_question_index, now)
         self.session.current_question_index += 1
-        self.session.last_activity = datetime.now(timezone.utc)
+        self.session.last_activity = now
         await self.session.save()
         return await self.get_current_question()
 
     async def prev_question(self) -> Question:
+        now = datetime.now(timezone.utc)
+        self.accumulate_time_for_question(self.session.current_question_index, now)
         self.session.current_question_index -= 1
-        self.session.last_activity = datetime.now(timezone.utc)
+        self.session.last_activity = now
         await self.session.save()
         return await self.get_current_question()
 
@@ -209,12 +251,30 @@ class SessionService:
             questions_remaining=self.session.questions_remaining,
             current_question_index=self.session.current_question_index,
             status=normalized_status,
+            required_count=getattr(self.session, "required_count", 0),
+            required_complete=self.is_required_complete(),
             is_submitted=normalized_status == "completed",
             score=score,
             ip_address=self.session.ip_address,
             device_type=getattr(self.session, "device_type", None),
             last_activity_unix=int(self.session.last_activity.replace(tzinfo=timezone.utc).timestamp()),
         )
+
+    def is_required_complete(self) -> bool:
+        """
+        Whether enough questions have been answered to allow finishing early.
+
+        `required_count` (set at session creation from Test.number_of_required_questions
+        and any obligatory TestQuestionRule slots) is treated as a simple threshold on
+        the number of answered questions — matching PV-A-1's "N mandatory questions,
+        then the student may continue or finish" flow — rather than requiring specific
+        question indices, since navigation can be free-form.
+        """
+        required = getattr(self.session, "required_count", 0) or 0
+        if required <= 0:
+            return True
+        answers = json.loads(self.session.answers or "{}")
+        return len(answers) >= required
 
     # --------- Question helpers ---------
 
@@ -269,6 +329,12 @@ class SessionService:
             # Already finished; you can also raise if you prefer.
             return session
 
+        if session.questions_remaining > 0 and not self.is_required_complete():
+            raise ValueError(
+                "Cannot finish: required questions are not all answered yet "
+                f"({getattr(session, 'required_count', 0)} required)."
+            )
+
         session.status = SessionStatus.FINISHED
         time_finish = datetime.now(timezone.utc)
         time_start = session.time_start or time_finish
@@ -281,7 +347,7 @@ class SessionService:
         # Load questions from Redis
         questions = [await QuestionRedis.get(qid) for qid in question_ids]
 
-        score = self._score_session(session, questions)
+        score = self._score_session(session, question_ids, questions)
         session.score = score
         await session.save()
         return session
@@ -323,16 +389,29 @@ class SessionService:
     #     return QuestionManager(self.session)
 
     @staticmethod
-    def _score_session(session: Session, questions: List[QuestionRedis]) -> float:
+    def _score_session(session: Session, question_ids: List[UUID], questions: List[QuestionRedis]) -> float:
         """
         Calculate session score in percent.
+
+        `question_ids` is this session's own ordering (position -> question_id);
+        `QuestionRedis.index` is NOT used here because that record is cached
+        globally per-question and may have been written by a different session
+        that presented the same bank question at a different position.
         """
         correct_answers = 0
         session_answers = json.loads(session.answers or "{}")
-        question_map = {q.index: q.correct_answer for q in questions}
+        question_map = {q.question_id: q for q in questions}
 
         for question_index, answer in session_answers.items():
-            if question_map.get(int(question_index)) == answer:
+            try:
+                question_id = question_ids[int(question_index)]
+            except (ValueError, IndexError):
+                continue
+            question = question_map.get(question_id)
+            if question is None:
+                continue
+            question_type = getattr(question, "question_type", "single")
+            if is_correct_answer(question_type, question.correct_answer, answer):
                 correct_answers += 1
 
         total_questions = len(questions)

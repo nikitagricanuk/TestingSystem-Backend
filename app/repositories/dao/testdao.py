@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.databases import connection
 from app.core.log import setup_logger
-from app.models.database import Test, TestQuestion, NavigationMethod
+from app.models.database import Test, TestQuestion, TestQuestionRule, NavigationMethod
 
 logger = setup_logger(__name__)
 
@@ -140,5 +140,42 @@ class TestDAO:
         if not test_question:
             return False
         await session.delete(test_question)
+        await session.flush()
+        return True
+
+    @staticmethod
+    @connection
+    async def add_rule(
+        test_id: UUID,
+        category_id: UUID,
+        is_mandatory: bool = True,
+        fixed_position: int | None = None,
+        session: AsyncSession = None,
+    ) -> TestQuestionRule:
+        rule = TestQuestionRule(
+            test_id=test_id,
+            category_id=category_id,
+            is_mandatory=is_mandatory,
+            fixed_position=fixed_position,
+        )
+        session.add(rule)
+        await session.flush()
+        return rule
+
+    @staticmethod
+    @connection
+    async def list_rules(test_id: UUID, session: AsyncSession = None) -> Sequence[TestQuestionRule]:
+        result = await session.execute(
+            select(TestQuestionRule).where(TestQuestionRule.test_id == test_id)
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    @connection
+    async def remove_rule(rule_id: UUID, session: AsyncSession = None) -> bool:
+        rule = await session.get(TestQuestionRule, rule_id)
+        if not rule:
+            return False
+        await session.delete(rule)
         await session.flush()
         return True
