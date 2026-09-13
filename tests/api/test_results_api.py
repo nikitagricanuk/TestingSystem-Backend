@@ -282,9 +282,83 @@ def test_leaderboard_school_scope_restricts_students_to_their_own_school(
     assert str(other_school_student_id) not in returned_ids
 
 
-def test_session_review_forbidden_for_student(client: TestClient, override_user):
-    res = client.get(f"/v1/tests/session/{uuid4()}/review")
+def test_session_review_forbidden_for_other_students_session(client: TestClient, monkeypatch, override_user):
+    from app.services.testing_engine.models.redis import Session as SessionModel
+
+    sid = uuid4()
+    session = SimpleNamespace(
+        sid=str(sid),
+        test_id=uuid4(),
+        user_id=uuid4(),  # someone else's session, not override_user's
+        question_ids=json.dumps([]),
+        answers=json.dumps({}),
+        score=50.0,
+    )
+
+    async def fake_get(session_id: str):
+        return session
+
+    monkeypatch.setattr(SessionModel, "get", staticmethod(fake_get), raising=False)
+
+    res = client.get(f"/v1/tests/session/{sid}/review")
     assert res.status_code == 403
+
+
+def test_session_review_forbidden_when_test_disallows_review(client: TestClient, monkeypatch, override_user):
+    from app.services.testing_engine.models.redis import Session as SessionModel
+    from app.repositories.dao.testdao import TestDAO
+
+    sid = uuid4()
+    session = SimpleNamespace(
+        sid=str(sid),
+        test_id=uuid4(),
+        user_id=override_user,  # this IS the caller's own session
+        question_ids=json.dumps([]),
+        answers=json.dumps({}),
+        score=50.0,
+    )
+
+    async def fake_get(session_id: str):
+        return session
+
+    async def fake_test_get(test_id):
+        return SimpleNamespace(id=test_id, can_be_reviewed=False)
+
+    monkeypatch.setattr(SessionModel, "get", staticmethod(fake_get), raising=False)
+    monkeypatch.setattr(TestDAO, "get", staticmethod(fake_test_get), raising=False)
+
+    res = client.get(f"/v1/tests/session/{sid}/review")
+    assert res.status_code == 403
+
+
+def test_session_review_allowed_for_own_session_when_test_allows_review(
+    client: TestClient, monkeypatch, override_user
+):
+    from app.services.testing_engine.models.redis import Session as SessionModel, QuestionRedis
+    from app.repositories.dao.testdao import TestDAO
+
+    sid = uuid4()
+    session = SimpleNamespace(
+        sid=str(sid),
+        test_id=uuid4(),
+        user_id=override_user,
+        question_ids=json.dumps([]),
+        answers=json.dumps({}),
+        score=90.0,
+    )
+
+    async def fake_get(session_id: str):
+        return session
+
+    async def fake_test_get(test_id):
+        return SimpleNamespace(id=test_id, can_be_reviewed=True)
+
+    monkeypatch.setattr(SessionModel, "get", staticmethod(fake_get), raising=False)
+    monkeypatch.setattr(TestDAO, "get", staticmethod(fake_test_get), raising=False)
+
+    res = client.get(f"/v1/tests/session/{sid}/review")
+    assert res.status_code == 200
+    assert res.json()["score"] == 90.0
 
 
 def test_session_review_returns_per_question_breakdown(client: TestClient, monkeypatch, app: FastAPI):

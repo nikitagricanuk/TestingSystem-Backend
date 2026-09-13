@@ -247,16 +247,26 @@ async def get_tests_result_result_id(
 @router.get("/tests/session/{sid}/review", response_model=SessionReview)
 async def get_session_review(
     sid: UUID,
-    current_user: UserFull = Depends(require_permissions(Permissions.Sessions.READ_ANY)),
+    current_user: UserFull = Depends(get_current_user),
 ) -> SessionReview:
     """
-    Teacher/admin/admissions view of one student's attempt: every question, what
-    they answered, the correct answer, and time spent per question (PV-A-1:
-    "какие вопросы были у студента, как он ответил, сколько времени потратил").
+    Per-question breakdown of one attempt: prompt, choices, the student's answer,
+    the correct answer, and time spent per question. Staff with read_any_sessions
+    can always view it (PV-A-1's teacher attempt-review requirement); the session's
+    own owner can view it only when the test opts in via Test.can_be_reviewed
+    ("Разрешить просмотр ответов" in the test editor).
     """
     session = await _load_session(sid)
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    is_privileged = Permissions.Sessions.READ_ANY.value in (current_user.permissions or [])
+    if not is_privileged:
+        if str(session.user_id) != str(current_user.id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session not available")
+        test = await TestDAO.get(UUID(str(session.test_id)))
+        if not test or not test.can_be_reviewed:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Review not available for this test")
 
     question_ids = _question_ids_from_session(session)
     answers = json.loads(session.answers or "{}")
@@ -469,12 +479,19 @@ async def get_tests_leaderboard(
         user = users_by_id.get(UUID(str(session.user_id)))
         nickname = getattr(user, "nickname", None) if user else None
         school = getattr(user, "school", None) if user else None
+        error_rate = (
+            1.0 - (result.correct_answers / result.total_questions)
+            if result.total_questions
+            else 0.0
+        )
         leaderboard.append(
             LeaderboardEntry(
                 rank=idx,
                 nickname=nickname or "Anonymous",
                 school=getattr(school, "short_name", None) or getattr(school, "full_name", None) if school else None,
                 score=result.score or 0.0,
+                error_rate=round(error_rate, 4),
+                completed_at=session.time_finish,
                 test_id=UUID(str(session.test_id)),
                 group_scores=result.group_scores,
             )

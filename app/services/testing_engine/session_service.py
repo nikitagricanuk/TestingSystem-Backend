@@ -48,8 +48,14 @@ class SessionService:
 
         await QuestionSnapshotService.snapshot_for_session(question_ids)
 
+        sid = str(uuid.uuid4())
         session = Session(
-            sid=str(uuid.uuid4()),
+            # aredis_om's `primary_key=True` on a non-`pk`-named field (`sid`) doesn't
+            # actually rewire the model's real Redis key under this pydantic version —
+            # it silently keeps using the base class's auto-generated ULID `pk`, so
+            # `Session.get(sid)` would 404 unless `pk` is set explicitly to match.
+            pk=sid,
+            sid=sid,
             test_id=test_id,
             user_id=user_id,
             question_ids=json.dumps([str(qid) for qid in question_ids]),

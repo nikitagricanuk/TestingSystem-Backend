@@ -185,11 +185,16 @@ def patch_userdao(monkeypatch):
         # return a stable UUID-ish string for tests
         return "b368842d-b837-4b97-b04b-5f3685ea354c"
 
+    async def fake_update_password(self, user_id, hashed_password):
+        state["updated_password"] = hashed_password
+        return state.get("user_with_perms")
+
     monkeypatch.setattr(UserDAO, "get_user_by_email", fake_get_user_by_email, raising=False)
     monkeypatch.setattr(UserDAO, "get_user_with_role_and_permissions", fake_get_user_with_role_and_permissions, raising=False)
     monkeypatch.setattr(UserDAO, "get_user_by_id", fake_get_user_by_id, raising=False)
     monkeypatch.setattr(UserDAO, "create", fake_create, raising=False)
     monkeypatch.setattr(UserDAO, "get_role_id", fake_get_role_id, raising=False)
+    monkeypatch.setattr(UserDAO, "update_password", fake_update_password, raising=False)
 
     return state
 
@@ -286,6 +291,34 @@ def test_me_invalid_token_401(client: TestClient, patch_userdao, jwt_override, m
     res = client.get("/v1/auth/users/me", headers={"Authorization": "Bearer INVALID"})
     assert res.status_code == 401
     assert "Invalid token" in res.json()["detail"]
+
+
+def test_change_password_success(client: TestClient, patch_userdao, jwt_override):
+    _, user_id = jwt_override
+    patch_userdao["user_with_perms"] = _fake_user(user_id=user_id)
+
+    res = client.post(
+        "/v1/auth/users/me/password",
+        json={"current_password": "old-pass", "new_password": "new-pass-123"},
+        headers={"Authorization": "Bearer valid-token-irrelevant-to-fake"},
+    )
+    assert res.status_code == 204
+    assert patch_userdao["updated_password"] == "hashed"
+
+
+def test_change_password_wrong_current_400(client: TestClient, patch_userdao, jwt_override, monkeypatch):
+    _, user_id = jwt_override
+    patch_userdao["user_with_perms"] = _fake_user(user_id=user_id)
+
+    import app.services.auth.routers.auth as auth_router
+    monkeypatch.setattr(auth_router, "verify_password", lambda raw, hashed: False, raising=False)
+
+    res = client.post(
+        "/v1/auth/users/me/password",
+        json={"current_password": "wrong", "new_password": "new-pass-123"},
+        headers={"Authorization": "Bearer valid-token-irrelevant-to-fake"},
+    )
+    assert res.status_code == 400
 
 
 def test_logout_success_204(client: TestClient, jwt_override):

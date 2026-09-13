@@ -183,6 +183,19 @@ class UserDAO:
             raise
 
     @connection
+    async def update_password(self, user_id: UUID | str, hashed_password: str, session: Optional[AsyncSession] = None) -> User | None:
+        """Set an already-hashed password directly — deliberately bypasses
+        _ALLOWED_UPDATE_FIELDS/update_user_by_id so the generic profile-update
+        payload can never smuggle in a raw password."""
+        user = await session.get(User, user_id)
+        if not user:
+            return None
+        user.password = hashed_password
+        await session.commit()
+        await session.refresh(user)
+        return user
+
+    @connection
     async def update_user_by_email(self, email: str, user_data: Mapping[str, Any], session: Optional[AsyncSession] = None) -> Optional[User]:
         email = _normalize_email(email)
         user = await session.execute(select(User).where(User.email == email))

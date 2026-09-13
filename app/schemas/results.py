@@ -100,5 +100,7 @@ class LeaderboardEntry(BaseModel):
     nickname: str
     school: Optional[str] = None
     score: float
+    error_rate: float = 0.0
+    completed_at: Optional[datetime] = None
     test_id: UUID
     group_scores: List[GroupScore] = []

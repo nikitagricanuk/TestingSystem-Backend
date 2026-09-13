@@ -331,16 +331,16 @@ async def logout(payload: LogoutRequest, jwt: JWTService = Depends(get_jwt_servi
 
 # Example protected endpoint
 # @permissions_required(Permissions.Users.READ)
-@router.get("/users/me", response_model=User)
-async def get_me(current_user: User = Depends(get_current_user)) -> User:
+@router.get("/users/me", response_model=UserFull)
+async def get_me(current_user: UserFull = Depends(get_current_user)) -> UserFull:
     return current_user
 
 
-@router.patch("/users/me", response_model=User)
+@router.patch("/users/me", response_model=UserFull)
 async def update_me(
     payload: dict = Body(...),
     current_user: UserFull = Depends(get_current_user),
-) -> User:
+) -> UserFull:
     update_payload = _normalize_user_update(payload)
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updatable fields provided")
@@ -348,6 +348,22 @@ async def update_me(
     if not updated_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return _build_user_schema(updated_user)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/users/me/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    payload: ChangePasswordRequest,
+    current_user: UserFull = Depends(get_current_user),
+):
+    db_user = await UserDAO().get_user_by_id(current_user.id)
+    if not db_user or not verify_password(payload.current_password, db_user.password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+    await UserDAO().update_password(current_user.id, get_hashed_password(payload.new_password))
 
 
 @router.post("/signup", response_model=User)

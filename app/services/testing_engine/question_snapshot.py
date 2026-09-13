@@ -89,6 +89,11 @@ class QuestionSnapshotService:
             question_type = _question_type_value(question)
             category_name = question.category.category if question.category is not None else ""
             await QuestionRedis(
+                # See the matching note in session_service.py: aredis_om doesn't
+                # honor a custom-named primary_key=True field as the real Redis
+                # key under this pydantic version, so `pk` must be set explicitly
+                # or QuestionRedis.get(question_id) below will always 404.
+                pk=str(question.id),
                 question_id=question.id,
                 index=str(position),
                 category=category_name,
