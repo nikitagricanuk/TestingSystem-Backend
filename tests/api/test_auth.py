@@ -189,12 +189,16 @@ def patch_userdao(monkeypatch):
         state["updated_password"] = hashed_password
         return state.get("user_with_perms")
 
+    async def fake_list_users(self):
+        return state.get("all_users", [])
+
     monkeypatch.setattr(UserDAO, "get_user_by_email", fake_get_user_by_email, raising=False)
     monkeypatch.setattr(UserDAO, "get_user_with_role_and_permissions", fake_get_user_with_role_and_permissions, raising=False)
     monkeypatch.setattr(UserDAO, "get_user_by_id", fake_get_user_by_id, raising=False)
     monkeypatch.setattr(UserDAO, "create", fake_create, raising=False)
     monkeypatch.setattr(UserDAO, "get_role_id", fake_get_role_id, raising=False)
     monkeypatch.setattr(UserDAO, "update_password", fake_update_password, raising=False)
+    monkeypatch.setattr(UserDAO, "list_users", fake_list_users, raising=False)
 
     return state
 
@@ -319,6 +323,50 @@ def test_change_password_wrong_current_400(client: TestClient, patch_userdao, jw
         headers={"Authorization": "Bearer valid-token-irrelevant-to-fake"},
     )
     assert res.status_code == 400
+
+
+def test_list_users_forbidden_without_permission(client: TestClient, patch_userdao, jwt_override):
+    _, user_id = jwt_override
+    patch_userdao["user_with_perms"] = _fake_user(user_id=user_id, role_name="student", include_permissions=False)
+
+    res = client.get("/v1/auth/users", headers={"Authorization": "Bearer valid-token-irrelevant-to-fake"})
+    assert res.status_code == 403
+
+
+def test_list_users_allowed_with_permission(client: TestClient, patch_userdao, jwt_override):
+    _, user_id = jwt_override
+    admin = _fake_user(user_id=user_id)  # admin role, read_users included by default
+    patch_userdao["user_with_perms"] = admin
+    patch_userdao["all_users"] = [admin]
+
+    res = client.get("/v1/auth/users", headers={"Authorization": "Bearer valid-token-irrelevant-to-fake"})
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["full_name"] == "Ivan Sergeevich Petrov"
+
+
+def test_update_user_forbidden_without_permission(client: TestClient, patch_userdao, jwt_override):
+    _, user_id = jwt_override
+    patch_userdao["user_with_perms"] = _fake_user(user_id=user_id, role_name="student", include_permissions=False)
+
+    res = client.patch(
+        f"/v1/auth/users/{uuid4()}",
+        json={"full_name": "New Name"},
+        headers={"Authorization": "Bearer valid-token-irrelevant-to-fake"},
+    )
+    assert res.status_code == 403
+
+
+def test_delete_user_forbidden_without_permission(client: TestClient, patch_userdao, jwt_override):
+    _, user_id = jwt_override
+    patch_userdao["user_with_perms"] = _fake_user(user_id=user_id, role_name="student", include_permissions=False)
+
+    res = client.delete(
+        f"/v1/auth/users/{uuid4()}",
+        headers={"Authorization": "Bearer valid-token-irrelevant-to-fake"},
+    )
+    assert res.status_code == 403
 
 
 def test_logout_success_204(client: TestClient, jwt_override):

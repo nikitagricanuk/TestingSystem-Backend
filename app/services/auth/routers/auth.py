@@ -462,22 +462,31 @@ async def create_user(user: dict = Body(...)) -> User:
     )
 
 
-@router.get("/users", response_model=list[User])
-async def list_users() -> list[User]:
+@router.get("/users", response_model=list[UserFull])
+async def list_users(
+    current_user: UserFull = Depends(require_permissions(Permissions.Users.READ)),
+) -> list[UserFull]:
     users = await UserDAO().list_users()
     return [_build_user_schema(user) for user in users]
 
 
-@router.get("/users/{user_id}", response_model=User)
-async def get_user(user_id: UUID) -> User:
+@router.get("/users/{user_id}", response_model=UserFull)
+async def get_user(
+    user_id: UUID,
+    current_user: UserFull = Depends(require_permissions(Permissions.Users.READ)),
+) -> UserFull:
     user = await UserDAO().get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return _build_user_schema(user)
 
 
-@router.patch("/users/{user_id}", response_model=User)
-async def update_user(user_id: UUID, payload: dict = Body(...)) -> User:
+@router.patch("/users/{user_id}", response_model=UserFull)
+async def update_user(
+    user_id: UUID,
+    payload: dict = Body(...),
+    current_user: UserFull = Depends(require_permissions(Permissions.Users.UPDATE)),
+) -> UserFull:
     update_payload = _normalize_user_update(payload)
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updatable fields provided")
@@ -488,7 +497,10 @@ async def update_user(user_id: UUID, payload: dict = Body(...)) -> User:
 
 
 @router.delete("/users/{user_id}", response_model=UserDelete)
-async def delete_user(user_id: UUID) -> UserDelete:
+async def delete_user(
+    user_id: UUID,
+    current_user: UserFull = Depends(require_permissions(Permissions.Users.DELETE)),
+) -> UserDelete:
     user = await UserDAO().get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

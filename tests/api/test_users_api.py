@@ -35,14 +35,14 @@ def _fake_db_user(user_id: UUID | None = None):
     )
 
 
-def _make_user(user_id: UUID) -> UserFull:
+def _make_user(user_id: UUID, *, permissions: list[str] | None = None, role: str = "student") -> UserFull:
     now = datetime.now(timezone.utc)
     return UserFull(
         id=user_id,
         nickname="tester",
         email="tester@example.com",
         is_active=True,
-        role="student",
+        role=role,
         created_at=now,
         created_at_unix=int(now.timestamp()),
         updated_at=None,
@@ -51,7 +51,7 @@ def _make_user(user_id: UUID) -> UserFull:
         age=None,
         phone=None,
         school=None,
-        permissions=[],
+        permissions=permissions or [],
     )
 
 
@@ -74,6 +74,24 @@ def override_user(app: FastAPI):
 
     async def _override():
         return _make_user(user_id)
+
+    app.dependency_overrides[get_current_user] = _override
+    return user_id
+
+
+@pytest.fixture()
+def override_admin(app: FastAPI):
+    """An authenticated user with full user-management permissions — needed for
+    the admin-only /users* endpoints (GET /users is admin/admissions_committee
+    only; PATCH/DELETE are admin only, per Permissions.Users)."""
+    user_id = uuid4()
+
+    async def _override():
+        return _make_user(
+            user_id,
+            role="admin",
+            permissions=["read_users", "edit_users", "delete_users", "create_users"],
+        )
 
     app.dependency_overrides[get_current_user] = _override
     return user_id
@@ -107,7 +125,7 @@ def patch_userdao(monkeypatch):
     return state
 
 
-def test_list_users_returns_data(client: TestClient, patch_userdao):
+def test_list_users_returns_data(client: TestClient, patch_userdao, override_admin):
     patch_userdao["list_users"] = [_fake_db_user(), _fake_db_user()]
 
     res = client.get("/v1/auth/users")
@@ -119,7 +137,13 @@ def test_list_users_returns_data(client: TestClient, patch_userdao):
     assert body[0]["role"] == "admin"
 
 
-def test_get_user_not_found(client: TestClient, patch_userdao):
+def test_list_users_forbidden_for_non_admin(client: TestClient, patch_userdao, override_user):
+    res = client.get("/v1/auth/users")
+
+    assert res.status_code == 403
+
+
+def test_get_user_not_found(client: TestClient, patch_userdao, override_admin):
     patch_userdao["get_user_by_id"] = None
 
     res = client.get(f"/v1/auth/users/{uuid4()}")
@@ -128,7 +152,7 @@ def test_get_user_not_found(client: TestClient, patch_userdao):
     assert res.json()["detail"] == "User not found"
 
 
-def test_get_user_success(client: TestClient, patch_userdao):
+def test_get_user_success(client: TestClient, patch_userdao, override_admin):
     user_id = uuid4()
     patch_userdao["get_user_by_id"] = _fake_db_user(user_id)
 
@@ -140,7 +164,7 @@ def test_get_user_success(client: TestClient, patch_userdao):
     assert body["nickname"] == "nick"
 
 
-def test_update_user_normalizes_payload(client: TestClient, patch_userdao):
+def test_update_user_normalizes_payload(client: TestClient, patch_userdao, override_admin):
     user_id = uuid4()
     patch_userdao["update_user_by_id"] = _fake_db_user(user_id)
 
@@ -155,7 +179,7 @@ def test_update_user_normalizes_payload(client: TestClient, patch_userdao):
     assert payload["phone_number"] == "+7111"
 
 
-def test_update_user_rejects_empty_payload(client: TestClient):
+def test_update_user_rejects_empty_payload(client: TestClient, override_admin):
     res = client.patch(f"/v1/auth/users/{uuid4()}", json={})
 
     assert res.status_code == 400
@@ -175,7 +199,7 @@ def test_update_me_success(client: TestClient, patch_userdao, override_user):
     assert body["id"] == str(override_user)
 
 
-def test_delete_user_success(client: TestClient, patch_userdao):
+def test_delete_user_success(client: TestClient, patch_userdao, override_admin):
     user_id = uuid4()
     patch_userdao["get_user_by_id"] = _fake_db_user(user_id)
 
