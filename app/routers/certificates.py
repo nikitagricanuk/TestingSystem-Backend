@@ -85,6 +85,22 @@ async def list_certificate_templates(
     return [_template_out(t) for t in templates]
 
 
+@router.get("/certificates/templates/{template_id}/asset")
+async def get_certificate_template_asset(
+    template_id: UUID,
+    current_user: UserFull = Depends(require_permissions(Permissions.Certificates.READ)),
+) -> Response:
+    """Raw background PDF for the template editor's preview — the editor has
+    no other way to show the teacher what they're placing fields on."""
+    template = await CertificateTemplateDAO.get(template_id)
+    if template is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+    path = storage.resolve(template.asset_path)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Template asset missing")
+    return Response(content=path.read_bytes(), media_type="application/pdf")
+
+
 @router.patch("/certificates/templates/{template_id}/fields", response_model=CertificateTemplateOut)
 async def update_certificate_template_fields(
     template_id: UUID,

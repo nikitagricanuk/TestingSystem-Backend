@@ -36,6 +36,10 @@ COPY . .
 # Create non-root user (after files are present so chown is fast if needed)
 RUN adduser --disabled-password --gecos "" --home "/nonexistent" --shell "/sbin/nologin" --no-create-home appuser
 RUN chmod +x /app/entrypoint.sh
+# data/ ships committed geo CSVs but also doubles as the certificate storage
+# root at runtime (Settings.certificate_storage_path) — appuser needs write
+# access to create data/certificates/ and save uploaded template files there.
+RUN chown -R appuser:appuser /app/data
 USER appuser
 
 EXPOSE 8000

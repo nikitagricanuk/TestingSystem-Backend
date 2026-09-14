@@ -137,6 +137,42 @@ def test_list_templates_forbidden_without_permission(client: TestClient, app: Fa
     assert res.status_code == 403
 
 
+def test_get_template_asset_returns_pdf_bytes(client: TestClient, app: FastAPI, monkeypatch, tmp_path):
+    from app.repositories.dao.certificatedao import CertificateTemplateDAO
+
+    template_id = uuid4()
+    pdf_bytes = _sample_pdf_bytes()
+    asset_path = "sample.pdf"
+    (tmp_path / asset_path).write_bytes(pdf_bytes)
+
+    async def fake_get(tid):
+        assert tid == template_id
+        return SimpleNamespace(id=template_id, asset_path=asset_path)
+
+    _override(app, "teacher", ["read_certificates"])
+    monkeypatch.setattr(CertificateTemplateDAO, "get", fake_get, raising=False)
+
+    res = client.get(f"/v1/certificates/templates/{template_id}/asset")
+
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/pdf"
+    assert res.content == pdf_bytes
+
+
+def test_get_template_asset_not_found(client: TestClient, app: FastAPI, monkeypatch):
+    from app.repositories.dao.certificatedao import CertificateTemplateDAO
+
+    async def fake_get(tid):
+        return None
+
+    _override(app, "teacher", ["read_certificates"])
+    monkeypatch.setattr(CertificateTemplateDAO, "get", fake_get, raising=False)
+
+    res = client.get(f"/v1/certificates/templates/{uuid4()}/asset")
+
+    assert res.status_code == 404
+
+
 def test_download_certificate_forbidden_for_unrelated_student(client: TestClient, app: FastAPI, monkeypatch):
     from app.routers import certificates as certificates_router
 
