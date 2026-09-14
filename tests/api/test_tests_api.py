@@ -83,8 +83,11 @@ def patch_daos(monkeypatch):
 
     state = {}
 
-    async def fake_list_tests(*, offset=0, limit=100, session=None):
-        return state.get("tests", [])[offset:offset + limit]
+    async def fake_list_tests(*, offset=0, limit=100, owner_id=None, session=None):
+        tests = state.get("tests", [])
+        if owner_id is not None:
+            tests = [t for t in tests if getattr(t, "owner_id", None) == owner_id]
+        return tests[offset:offset + limit]
 
     async def fake_get_test(test_id: UUID, session=None):
         return state.get("test_by_id")
@@ -201,7 +204,7 @@ def patch_daos(monkeypatch):
     return state
 
 
-def test_list_tests_returns_payload(client: TestClient, patch_session_maker, patch_daos):
+def test_list_tests_returns_payload(client: TestClient, patch_session_maker, patch_daos, override_user):
     patch_daos["tests"] = [
         SimpleNamespace(id=uuid4(), name="T1", description=None, shuffle=True, navigation_method="free"),
         SimpleNamespace(id=uuid4(), name="T2", description=None, shuffle=True, navigation_method="free"),
@@ -272,14 +275,14 @@ def test_create_test_success(client: TestClient, patch_session_maker, patch_daos
     assert patch_daos["added_questions"] == [question_id]
 
 
-def test_update_test_empty_payload(client: TestClient, patch_session_maker):
+def test_update_test_empty_payload(client: TestClient, patch_session_maker, override_user):
     res = client.patch(f"/v1/tests/{uuid4()}", json={})
 
     assert res.status_code == 400
     assert res.json()["detail"] == "No updatable fields provided"
 
 
-def test_delete_test_success(client: TestClient, patch_session_maker, patch_daos):
+def test_delete_test_success(client: TestClient, patch_session_maker, patch_daos, override_user):
     test_id = uuid4()
     patch_daos["test_by_id"] = SimpleNamespace(id=test_id, name="DeleteMe")
 
@@ -288,6 +291,42 @@ def test_delete_test_success(client: TestClient, patch_session_maker, patch_daos
     assert res.status_code == 200
     body = res.json()
     assert body["id"] == str(test_id)
+
+
+def test_delete_test_forbidden_for_other_owner(client: TestClient, patch_session_maker, patch_daos, override_user):
+    test_id = uuid4()
+    patch_daos["test_by_id"] = SimpleNamespace(id=test_id, name="NotMine", owner_id=uuid4())
+
+    res = client.delete(f"/v1/tests/{test_id}")
+
+    assert res.status_code == 403
+
+
+def test_update_test_forbidden_for_other_owner(client: TestClient, patch_session_maker, patch_daos, override_user):
+    test_id = uuid4()
+    patch_daos["test_by_id"] = SimpleNamespace(id=test_id, name="NotMine", owner_id=uuid4())
+
+    res = client.patch(f"/v1/tests/{test_id}", json={"name": "Renamed"})
+
+    assert res.status_code == 403
+
+
+def test_list_tests_mine_filters_by_owner(client: TestClient, patch_session_maker, patch_daos, override_user):
+    mine = SimpleNamespace(
+        id=uuid4(), name="Mine", description=None, shuffle=True, navigation_method="free", owner_id=override_user
+    )
+    other = SimpleNamespace(
+        id=uuid4(), name="Other", description=None, shuffle=True, navigation_method="free", owner_id=uuid4()
+    )
+    patch_daos["tests"] = [mine, other]
+    patch_daos["test_questions"] = []
+
+    res = client.get("/v1/tests", params={"mine": "true"})
+
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["name"] == "Mine"
 
 
 def test_list_test_questions(client: TestClient, patch_session_maker, patch_daos):

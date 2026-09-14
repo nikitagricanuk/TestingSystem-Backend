@@ -37,6 +37,27 @@ async def test_update_test(async_test_session):
 
 
 @pytest.mark.asyncio
+async def test_update_test_navigation_method_persists_enum_member(async_test_session):
+    """update() must assign the NavigationMethod enum member, not its raw
+    .value string — assigning a plain string round-trips through Python's
+    default enum str() ("NavigationMethod.FREE") at bind time and is rejected
+    by Postgres's navigation_method_enum type (SQLite has no enum type and
+    accepted it silently, which is why this went unnoticed)."""
+    from app.models.database import NavigationMethod
+
+    test = await TestDAO.create(
+        {"name": "Nav", "shuffle": True, "navigation_method": "free"}, session=async_test_session
+    )
+    await async_test_session.commit()
+    assert test.navigation_method == NavigationMethod.FREE
+
+    updated = await TestDAO.update(test.id, {"navigation_method": "linear"}, session=async_test_session)
+    await async_test_session.commit()
+
+    assert updated.navigation_method == NavigationMethod.LINEAR
+
+
+@pytest.mark.asyncio
 async def test_delete_test(async_test_session):
     test = await TestDAO.create({"name": "To delete", "shuffle": True}, session=async_test_session)
     await async_test_session.commit()

@@ -39,11 +39,20 @@ def init_redis_connection() -> Redis:
 def connection(method):
     async def wrapper(*args, **kwargs):
         if "session" in kwargs and kwargs["session"] is not None:
-            # Use the provided session (e\.g\. from test)
+            # Use the provided session (e\.g\. from test) — the caller owns the
+            # transaction and is responsible for committing it.
             return await method(*args, **kwargs)
         async with async_session_maker() as session:
             try:
-                return await method(*args, session=session, **kwargs)
+                result = await method(*args, session=session, **kwargs)
+                # We opened this session ourselves, so we must also commit it —
+                # otherwise every write-only DAO method called without an
+                # explicit session (i.e. every call site that doesn't manage
+                # its own async_session_maker() block) flushes to the DB but
+                # the transaction is silently rolled back on session.close(),
+                # discarding the write with no error anywhere.
+                await session.commit()
+                return result
             except Exception as e:
                 await session.rollback()
                 raise e

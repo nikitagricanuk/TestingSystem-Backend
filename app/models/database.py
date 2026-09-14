@@ -123,6 +123,9 @@ class NavigationMethod(enum.Enum):
 class Test(Base):
     __tablename__ = "tests"
 
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
     name: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     start_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

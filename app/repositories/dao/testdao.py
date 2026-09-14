@@ -32,7 +32,12 @@ class TestDAO:
     async def create(data: dict[str, Any], session: AsyncSession = None) -> Test:
         nav = TestDAO._normalize_navigation(data.get("navigation_method"))
         if nav is not None:
-            data["navigation_method"] = nav.value
+            # Assign the enum member itself, not nav.value — SQLAlchemy's
+            # Enum(NavigationMethod, values_callable=...) column expects the
+            # native member for correct binding; a plain string round-trips
+            # through str(enum_member) instead ("NavigationMethod.FREE") and
+            # fails the DB's navigation_method_enum check at flush time.
+            data["navigation_method"] = nav
         test = Test(**data)
         session.add(test)
         try:
@@ -51,8 +56,13 @@ class TestDAO:
 
     @staticmethod
     @connection
-    async def list(offset: int = 0, limit: int = 100, session: AsyncSession = None) -> Sequence[Test]:
-        result = await session.execute(select(Test).offset(offset).limit(limit))
+    async def list(
+        offset: int = 0, limit: int = 100, owner_id: UUID | None = None, session: AsyncSession = None
+    ) -> Sequence[Test]:
+        query = select(Test)
+        if owner_id is not None:
+            query = query.where(Test.owner_id == owner_id)
+        result = await session.execute(query.offset(offset).limit(limit))
         return result.scalars().all()
 
     @staticmethod
@@ -64,7 +74,7 @@ class TestDAO:
         if "navigation_method" in data:
             nav = TestDAO._normalize_navigation(data.get("navigation_method"))
             if nav is not None:
-                data["navigation_method"] = nav.value
+                data["navigation_method"] = nav  # see create()'s comment above
         for key, value in data.items():
             setattr(test, key, value)
         try:

@@ -37,6 +37,7 @@ class TestUpdate(BaseModel):
 
 class TestOut(TestBase):
     id: UUID
+    owner_id: UUID | None = None
     created_at: datetime | None = None
     created_at_unix: int | None = None
     updated_at: datetime | None = None

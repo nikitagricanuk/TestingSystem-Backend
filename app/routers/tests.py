@@ -36,18 +36,24 @@ from app.services.auth.routers.auth import get_current_user
 router = APIRouter()
 
 
+def _navigation_method_value(test) -> str:
+    nav = getattr(test, "navigation_method", "free")
+    return nav.value if hasattr(nav, "value") else str(nav)
+
+
 def _test_out(test, total_questions: int) -> TestOut:
     created_at = getattr(test, "created_at", None)
     updated_at = getattr(test, "updated_at", None)
     return TestOut(
         id=test.id,
+        owner_id=getattr(test, "owner_id", None),
         name=test.name,
         description=getattr(test, "description", None),
         start_date=getattr(test, "start_date", None),
         end_date=getattr(test, "end_date", None),
         number_of_required_questions=getattr(test, "number_of_required_questions", None),
         shuffle=bool(getattr(test, "shuffle", True)),
-        navigation_method=str(getattr(test, "navigation_method", "free")),
+        navigation_method=_navigation_method_value(test),
         can_be_reviewed=getattr(test, "can_be_reviewed", None),
         welcome_message=getattr(test, "welcome_message", None),
         config=getattr(test, "config", None),
@@ -94,8 +100,11 @@ def _validate_required_questions(required: int | None, total: int) -> None:
 async def list_tests(
     offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
+    mine: bool = Query(False, description="Only tests owned by the current user (for \"Мои тесты\")"),
+    current_user: UserFull = Depends(get_current_user),
 ) -> list[TestOut]:
-    tests = await TestDAO.list(offset=offset, limit=limit)
+    owner_id = current_user.id if mine else None
+    tests = await TestDAO.list(offset=offset, limit=limit, owner_id=owner_id)
     results: list[TestOut] = []
     for test in tests:
         questions = await TestDAO.list_questions(test.id)
@@ -127,7 +136,9 @@ async def create_test(
         try:
             for question_id in question_ids:
                 await QuestionDAO.get(question_id, session=session)
-            test = await TestDAO.create(payload.dict(exclude={"question_ids"}), session=session)
+            test_data = payload.dict(exclude={"question_ids"})
+            test_data["owner_id"] = current_user.id
+            test = await TestDAO.create(test_data, session=session)
             await TestDAO.add_questions(test.id, question_ids, session=session)
             await session.commit()
         except QuestionNotFoundError as exc:
@@ -136,10 +147,19 @@ async def create_test(
     return _test_out(test, len(question_ids))
 
 
+def _assert_can_manage_test(test, current_user: UserFull) -> None:
+    # owner_id IS NULL is a legacy/unowned test (predates ownership tracking) —
+    # any teacher may manage it rather than permanently orphaning it.
+    owner_id = getattr(test, "owner_id", None)
+    if owner_id is not None and str(owner_id) != str(current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Test not available")
+
+
 @router.patch("/tests/{test_id}", response_model=TestOut)
 async def update_test(
     test_id: UUID,
     payload: TestUpdate,
+    current_user: UserFull = Depends(get_current_user),
 ) -> TestOut:
     data = payload.dict(exclude_unset=True)
     if not data:
@@ -149,6 +169,7 @@ async def update_test(
         test = await TestDAO.get(test_id, session=session)
         if not test:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+        _assert_can_manage_test(test, current_user)
         if "number_of_required_questions" in data:
             total_questions = len(await TestDAO.list_questions(test_id, session=session))
             _validate_required_questions(data.get("number_of_required_questions"), total_questions)
@@ -160,11 +181,12 @@ async def update_test(
 
 
 @router.delete("/tests/{test_id}", response_model=TestDelete)
-async def delete_test(test_id: UUID) -> TestDelete:
+async def delete_test(test_id: UUID, current_user: UserFull = Depends(get_current_user)) -> TestDelete:
     async with async_session_maker() as session:
         test = await TestDAO.get(test_id, session=session)
         if not test:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+        _assert_can_manage_test(test, current_user)
         await TestDAO.delete(test_id, session=session)
         await session.commit()
     deleted_at = datetime.now(timezone.utc)
